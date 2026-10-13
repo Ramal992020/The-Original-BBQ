@@ -33,8 +33,12 @@ function ensureReady() {
     readyPromise = (async () => {
       await store.init();
       seed.seed();
+      await store.idle();
       return true;
-    })();
+    })().catch((e) => {
+      readyPromise = null;
+      throw e;
+    });
   }
   return readyPromise;
 }
@@ -907,6 +911,11 @@ function serveStatic(req, res, url) {
 /* ============================== السيرفر ============================== */
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const routedPath = url.searchParams.get('__path') || url.searchParams.get('...route') || url.searchParams.get('route') || '';
+  if (routedPath && (url.pathname === '/api/index' || url.pathname === '/api/index.js' || url.pathname === '/api/[...route]' || url.pathname === '/api/[...route].js')) {
+    url.pathname = '/api/' + String(routedPath).replace(/^\/+/, '');
+  }
+  url.searchParams.delete('__path');
   try {
     await ensureReady();
     if (url.pathname.startsWith('/api/')) {
@@ -926,10 +935,15 @@ async function handle(req, res) {
 }
 
 /** نسخة Vercel: بنستنى الحفظ قبل ما ننهي الرد */
-function serverlessHandler(req, res) {
+async function serverlessHandler(req, res) {
+  let endPromise = Promise.resolve();
   const end = res.end.bind(res);
-  res.end = (...args) => { store.idle().catch(() => {}).then(() => end(...args)); return res; };
-  return handle(req, res);
+  res.end = (...args) => {
+    endPromise = store.idle().catch(() => {}).then(() => end(...args));
+    return res;
+  };
+  await handle(req, res);
+  await endPromise;
 }
 
 const server = http.createServer(handle);
