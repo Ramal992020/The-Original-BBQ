@@ -14,23 +14,27 @@
    ========================================================================== */
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const MODE = process.env.STORAGE || (process.env.UPSTASH_REDIS_REST_URL ? 'redis' : 'file');
+const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const REDIS_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, '');
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const PREFIX = process.env.REDIS_PREFIX || 'bbq:';
+let MODE = process.env.STORAGE || (REDIS_URL && REDIS_TOKEN ? 'redis' : 'file');
 
-const DATA_DIR = process.env.BBQ_DATA_DIR || path.join(__dirname, 'data');
-const UPLOAD_DIR = process.env.BBQ_UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+const DATA_DIR = process.env.BBQ_DATA_DIR || (IS_SERVERLESS ? path.join(os.tmpdir(), 'bbq-data') : path.join(__dirname, 'data'));
+const UPLOAD_DIR = process.env.BBQ_UPLOAD_DIR || (IS_SERVERLESS ? path.join(os.tmpdir(), 'bbq-uploads') : path.join(__dirname, '..', 'uploads'));
 
-/* في وضع redis مفيش قرص — فمنعملش أي مجلدات */
-if (MODE === 'file') {
+function ensureDirs() {
   for (const d of [DATA_DIR, UPLOAD_DIR]) {
-    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+    try { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); } catch {}
   }
 }
+
+/* في وضع redis مفيش قرص — فمنعملش أي مجلدات */
+if (MODE === 'file') ensureDirs();
 
 const cache = new Map();
 const pending = new Set();
@@ -83,10 +87,31 @@ async function init() {
   if (ready) return ready;
   ready = (async () => {
     if (MODE === 'redis') {
-      if (!REDIS_URL || !REDIS_TOKEN) throw new Error('إعدادات Upstash ناقصة (UPSTASH_REDIS_REST_URL / TOKEN)');
-      await loadFromRedis();
-      console.log(`🗄️  التخزين: Upstash Redis (${cache.get('__manifest').length} مجموعة)`);
+      if (!REDIS_URL || !REDIS_TOKEN) {
+        if (IS_SERVERLESS && !process.env.STORAGE) {
+          console.warn('[store] إعدادات Upstash غير مكتملة — التحويل المؤقت لـ /tmp');
+          MODE = 'file';
+          ensureDirs();
+          loadFromDisk();
+          return true;
+        }
+        throw new Error('إعدادات Upstash ناقصة (UPSTASH_REDIS_REST_URL / TOKEN)');
+      }
+      try {
+        await loadFromRedis();
+        console.log(`🗄️  التخزين: Upstash Redis (${cache.get('__manifest').length} مجموعة)`);
+      } catch (e) {
+        if (IS_SERVERLESS && !process.env.STORAGE) {
+          console.warn('[store] تعذر الاتصال بـ Upstash Redis، التحويل المؤقت لـ /tmp:', e.message);
+          MODE = 'file';
+          ensureDirs();
+          loadFromDisk();
+          return true;
+        }
+        throw e;
+      }
     } else {
+      ensureDirs();
       loadFromDisk();
       console.log(`🗄️  التخزين: ملفات JSON في ${DATA_DIR}`);
     }
@@ -168,7 +193,8 @@ function backup() {
 }
 
 module.exports = {
-  MODE, DATA_DIR, UPLOAD_DIR, PREFIX,
+  get MODE() { return MODE; },
+  IS_SERVERLESS, DATA_DIR, UPLOAD_DIR, PREFIX,
   init, idle, redisCmd, redisGet, redisSet,
   all, write, find, filter, insert, update, remove,
   uid, token, nextOrderNumber, backup,

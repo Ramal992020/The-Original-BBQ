@@ -6,6 +6,9 @@
       "memory": 1024
     }
   },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/[...route]" }
+  ],
   "headers": [
     {
       "source": "/img/(.*)",

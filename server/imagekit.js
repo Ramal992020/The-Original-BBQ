@@ -108,7 +108,7 @@ function saveUpload(file, { prefix = 'up' } = {}) {
   else if (safeExt === 'png') data = resizePng(data, 1200);
 
   /* Vercel/سيرفرلس: مفيش قرص ثابت — بنخزن في قاعدة البيانات نفسها */
-  if (store.MODE === 'redis') return saveToDb(data, MIME[safeExt] || 'image/jpeg', prefix);
+  if (store.MODE === 'redis' || store.IS_SERVERLESS) return saveToDb(data, MIME[safeExt] || 'image/jpeg', prefix);
 
   const name = `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.${safeExt}`;
   fs.writeFileSync(path.join(store.UPLOAD_DIR, name), data);
@@ -123,7 +123,7 @@ function saveBase64(b64, mimeHint = 'image/png') {
   const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'jpg';
   const data = ext === 'jpg' ? resizeJpeg(payload, 1200, 80) : ext === 'png' ? resizePng(payload, 1200) : payload;
 
-  if (store.MODE === 'redis') return saveToDb(data, mime, 'ai');
+  if (store.MODE === 'redis' || store.IS_SERVERLESS) return saveToDb(data, mime, 'ai');
 
   const name = `ai-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
   fs.writeFileSync(path.join(store.UPLOAD_DIR, name), data);

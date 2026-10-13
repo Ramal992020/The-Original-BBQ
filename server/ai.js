@@ -29,6 +29,8 @@ const POOL = [
   { file: 'ai-meals.jpg',      kw: ['وجبة', 'ميكس', 'جريل', 'meal', 'أرز'] },
 ];
 
+const BUILTIN_POOL_FILES = new Set(POOL.map((p) => p.file));
+
 const CATEGORY_HINT = {
   meals: 'ai-meals.jpg', rolls: 'ai-rolls.jpg', charcoal: 'ai-charcoal.jpg',
   chicken: 'ai-chicken.jpg', smash: 'ai-smash.jpg', rollpotato: 'ai-potatoroll.jpg',
@@ -131,7 +133,7 @@ async function generateFoodImage(item) {
   // 2) مطابقة ذكية من المكتبة المرفقة
   const file = pickFromPool(item.name, item.desc, item.cat);
   const src = path.join(IMG_DIR, file);
-  if (fs.existsSync(src)) {
+  if (BUILTIN_POOL_FILES.has(file) || fs.existsSync(src)) {
     return { url: '/img/' + file, source: 'pool', provider: 'built-in-library' };
   }
 
