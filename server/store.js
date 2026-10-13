@@ -18,11 +18,13 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
+const cleanEnv = (v) => String(v || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
 const IS_SERVERLESS = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const REDIS_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, '');
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+const REDIS_URL = cleanEnv(process.env.UPSTASH_REDIS_REST_URL).replace(/\/+$/, '');
+const REDIS_TOKEN = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN);
 const PREFIX = process.env.REDIS_PREFIX || 'bbq:';
-let MODE = process.env.STORAGE || (REDIS_URL && REDIS_TOKEN ? 'redis' : 'file');
+const HAS_VALID_REDIS = /^https?:\/\//i.test(REDIS_URL) && !!REDIS_TOKEN;
+let MODE = process.env.STORAGE || (HAS_VALID_REDIS ? 'redis' : 'file');
 
 const DATA_DIR = process.env.BBQ_DATA_DIR || (IS_SERVERLESS ? path.join(os.tmpdir(), 'bbq-data') : path.join(__dirname, 'data'));
 const UPLOAD_DIR = process.env.BBQ_UPLOAD_DIR || (IS_SERVERLESS ? path.join(os.tmpdir(), 'bbq-uploads') : path.join(__dirname, '..', 'uploads'));

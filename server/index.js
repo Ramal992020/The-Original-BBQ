@@ -911,10 +911,11 @@ function serveStatic(req, res, url) {
 /* ============================== السيرفر ============================== */
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  if (url.pathname === '/api/[...route]' || url.pathname === '/api/[...route].js') {
-    const seg = url.searchParams.get('...route') || url.searchParams.get('route') || '';
-    if (seg) url.pathname = '/api/' + String(seg).replace(/^\/+/, '');
+  const routedPath = url.searchParams.get('__path') || url.searchParams.get('...route') || url.searchParams.get('route') || '';
+  if (routedPath && (url.pathname === '/api/index' || url.pathname === '/api/index.js' || url.pathname === '/api/[...route]' || url.pathname === '/api/[...route].js')) {
+    url.pathname = '/api/' + String(routedPath).replace(/^\/+/, '');
   }
+  url.searchParams.delete('__path');
   try {
     await ensureReady();
     if (url.pathname.startsWith('/api/')) {

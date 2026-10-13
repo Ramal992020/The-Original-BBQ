@@ -2038,7 +2038,8 @@ window.addEventListener('hashchange', () => { closeSheet(); closeDrawer(); rende
   } catch (e) {
     document.getElementById('view').innerHTML = `<div class="empty" style="padding-top:80px">
       <div class="big">🔌</div><h3>مش قادر أوصل للسيرفر</h3>
-      <p>شغّل السيرفر الأول: <code>npm start</code> وبعدين افتح نفس الرابط</p></div>`;
+      <p>تأكد من تشغيل السيرفر أو اكتمال النشر على Vercel ثم اضغط إعادة المحاولة</p>
+      <div style="margin-top:16px"><button class="btn pri" onclick="location.reload()">إعادة المحاولة 🔄</button></div></div>`;
     return;
   }
   await render({ force: true, scroll: true });
