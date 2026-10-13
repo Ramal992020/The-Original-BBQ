@@ -1,0 +1,24 @@
+{
+  "name": "original-bbq-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Original BBQ — تطبيق طلبات كامل: واجهة عميل + لوحة إدارة + صلاحيات + إشعارات (بدون أي مكتبات خارجية للتشغيل)",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node server/test.js",
+    "test:vercel": "node server/test-vercel.js",
+    "fake-redis": "node tools/fake-upstash.js",
+    "reset": "node server/reset.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0"
+  }
+}

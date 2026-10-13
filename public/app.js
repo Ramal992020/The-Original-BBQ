@@ -1,0 +1,2050 @@
+/* ============================================================================
+   app.js — واجهة التطبيق (العميل + لوحة الإدارة)
+   ----------------------------------------------------------------------------
+   ملاحظة مهمة: إخفاء الأزرار هنا "شكلي" — كل الصلاحيات بتتفحص على السيرفر.
+   لو حد فتح رابط الإدارة مباشرة وهو Customer، السيرفر بيرجّع 403.
+   ========================================================================== */
+'use strict';
+
+/* ============================== ١) أدوات ============================== */
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const h = (v) => String(v == null ? '' : v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const AR_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+function fmtDT(ts) {
+  const d = new Date(ts); let hh = d.getHours();
+  const ap = hh >= 12 ? 'م' : 'ص'; hh = hh % 12 || 12;
+  return `${AR_DAYS[d.getDay()]} ${d.getDate()} ${AR_MONTHS[d.getMonth()]} · ${hh}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+}
+function fmtT(ts) {
+  const d = new Date(ts); let hh = d.getHours();
+  const ap = hh >= 12 ? 'م' : 'ص'; hh = hh % 12 || 12;
+  return `${hh}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+}
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return 'الآن';
+  if (s < 3600) return `قبل ${Math.floor(s / 60)} دقيقة`;
+  if (s < 86400) return `قبل ${Math.floor(s / 3600)} ساعة`;
+  return fmtDT(ts);
+}
+const money = (n) => `${Math.round(Number(n) || 0).toLocaleString('en-US')} ${S.currency}`;
+
+let toastTimer;
+function toast(msg, ms = 2400) {
+  let el = $('#toast');
+  if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="t">${h(msg)}</div>`;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.innerHTML = ''; }, ms);
+}
+
+/* ============================== ٢) الاتصال بالسيرفر ============================== */
+const TOKEN_KEY = 'bbq_token';
+const api = {
+  token: localStorage.getItem(TOKEN_KEY) || '',
+  setToken(t) { this.token = t || ''; try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} },
+  async req(path, { method = 'GET', body, raw } = {}) {
+    const headers = {};
+    if (this.token) headers.authorization = 'Bearer ' + this.token;
+    let payload;
+    if (raw) payload = raw;
+    else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
+    const res = await fetch(path, { method, headers, body: payload });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) { const e = new Error(data.error || ('خطأ ' + res.status)); e.status = res.status; throw e; }
+    return data;
+  },
+};
+
+/* ============================== ٣) حالة التطبيق ============================== */
+let S = {};                 // إعدادات المطعم (من السيرفر)
+let CATS = [], MENU = [];
+let ME = null;              // المستخدم المسجل
+let NOTIFS = [];
+let cart = [];
+try { cart = JSON.parse(localStorage.getItem('bbq_cart') || '[]'); } catch { cart = []; }
+const isStaff = () => !!ME && (ME.role === 'admin' || ME.role === 'supervisor');
+const isAdmin = () => !!ME && ME.role === 'admin';
+const saveCart = () => { try { localStorage.setItem('bbq_cart', JSON.stringify(cart)); } catch {} };
+const byId = (id) => MENU.find((x) => String(x.id) === String(id));
+const catName = (id) => (CATS.find((c) => c.id === id) || {}).name || '';
+
+async function loadBootstrap() {
+  const d = await api.req('/api/bootstrap');
+  S = d.settings; CATS = d.categories; MENU = d.menu; ME = d.user;
+}
+
+/* بحث عن الأصناف المستوردة اللي مش عندها صورة (للأدمن) */
+const missingImages = () => MENU.filter((m) => !m.image || m.imageSource === 'pool' || m.imageSource === 'placeholder');
+
+/* ============================== ٤) السلة ============================== */
+const cartCount = () => cart.reduce((s, i) => s + i.qty, 0);
+const lineTotal = (i) => (i.price + (i.addons || []).reduce((a, x) => a + x.price, 0)) * i.qty;
+
+function cartTotals() {
+  const subtotal = cart.reduce((s, i) => s + lineTotal(i), 0);
+  let delivery = 0, discount = 0;
+  const promo = S.promos ? S.promos.find((p) => p.code === promoCode) : null;
+  if (promo && subtotal >= (promo.min || 0)) {
+    if (promo.type === 'percent') discount = Math.round(subtotal * promo.value / 100);
+    else if (promo.type === 'fixed') discount = Math.min(promo.value, subtotal);
+  }
+  if (cart.length) {
+    delivery = Number(S.deliveryFee || 0);
+    if (S.freeDeliveryOver > 0 && subtotal >= S.freeDeliveryOver) delivery = 0;
+    if (promo && promo.type === 'freedelivery' && subtotal >= (promo.min || 0)) delivery = 0;
+  }
+  return { subtotal, delivery, discount, total: Math.max(0, subtotal + delivery - discount) };
+}
+
+let promoCode = '';
+function addToCart(item, qty, addons, note) {
+  const key = [item.id, (addons || []).map((a) => a.name).sort().join('+'), note || ''].join('|');
+  const found = cart.find((c) => c.key === key);
+  if (found) found.qty += qty;
+  else cart.push({ key, id: item.id, name: item.name, image: item.image, price: item.price || 0, qty, addons: addons || [], note: note || '' });
+  saveCart(); renderCartBar(); updateBadges();
+  toast(`تم إضافة ${item.name} للسلة ✅`);
+}
+
+/* ============================== ٥) الراوتر ============================== */
+function parseHash() {
+  const raw = location.hash.replace(/^#\/?/, '');
+  const [pathPart, queryPart] = raw.split('?');
+  const seg = pathPart.split('/').filter(Boolean);
+  return { name: seg[0] || 'home', sub: seg[1] || null, param: seg[1] || null, q: new URLSearchParams(queryPart || '') };
+}
+const go = (p) => { location.hash = '#/' + String(p).replace(/^#?\/?/, ''); };
+
+const NAV = [
+  { to: 'home', icon: '🏠', label: 'الرئيسية' },
+  { to: 'menu', icon: '📋', label: 'المنيو' },
+  { to: 'cart', icon: '🛒', label: 'السلة', cart: true },
+  { to: 'orders', icon: '🧾', label: 'طلباتي' },
+  { to: 'account', icon: '👤', label: 'حسابي' },
+];
+const navItems = () => (isStaff() ? [...NAV, { to: 'admin', icon: '🧑‍🍳', label: 'لوحة الإدارة' }] : NAV);
+
+/* ============================== ٦) عناصر مشتركة ============================== */
+function statusOf(id) { return (S.statuses || []).find((s) => s.id === id) || { id, label: id, emoji: '•', note: '' }; }
+
+/* ===== حالة الدفع ===== */
+const PAY_STATES = {
+  paid:     { label: 'مدفوع',                icon: '✅', color: 'var(--green)' },
+  pending:  { label: 'بانتظار الدفع',        icon: '⏳', color: 'var(--ember-2)' },
+  unpaid:   { label: 'الدفع عند الاستلام',    icon: '💵', color: 'var(--muted)' },
+  failed:   { label: 'فشل الدفع',            icon: '⚠️', color: 'var(--red)' },
+  refunded: { label: 'مرتجع',                icon: '↩️', color: 'var(--blue)' },
+};
+const payState = (o) => PAY_STATES[o.payment_status || 'unpaid'] || PAY_STATES.unpaid;
+function payChip(o) {
+  const st = payState(o);
+  return `<span class="pay-chip" style="color:${st.color}">${st.icon} ${st.label}</span>`;
+}
+const isOnline = (o) => (S.payments || []).find((p) => p.id === o.payment)?.kind === 'online';
+function statusChip(id) { const s = statusOf(id); return `<span class="status-chip s-${h(s.id)}">${s.emoji} ${h(s.label)}</span>`; }
+const FLOW = () => (S.statuses || []).filter((s) => s.id !== 'cancelled');
+
+function headerHTML(active) {
+  const unread = NOTIFS.filter((n) => !n.read).length;
+  return `
+  <header class="header">
+    <a class="brand" href="#/">
+      <span class="logo">🔥</span>
+      <span class="brand-text">
+        <span class="brand-name">${h(S.name || '')}</span>
+        <span class="brand-sub">${h(S.tagline || '')}${S.deliveryEta ? ' · توصيل خلال ' + h(S.deliveryEta) : ''}</span>
+      </span>
+    </a>
+    ${isStaff() ? `<button class="icon-btn" id="notifBtn" title="الإشعارات">🔔${unread ? `<span class="badge-n red">${unread}</span>` : ''}</button>` : ''}
+    <a class="icon-btn" href="tel:${h(S.phone || '')}" title="اتصال">📞</a>
+    <button class="icon-btn" data-act="nav" data-to="cart" title="السلة">🛒<span class="badge-n ${cartCount() ? '' : 'hidden'}" id="headBadge">${cartCount()}</span></button>
+  </header>`;
+}
+
+function navHTML(active) {
+  const items = navItems();
+  return `
+  <nav class="nav" style="grid-template-columns:repeat(${items.length},1fr)">
+    ${items.map((n) => `
+      <button data-act="nav" data-to="${n.to}" class="${active === n.to ? 'on' : ''}">
+        <span class="ni">${n.icon}</span><span>${n.label}</span>
+        ${n.cart ? `<span class="nb ${cartCount() ? '' : 'hidden'}" id="navBadge">${cartCount()}</span>` : ''}
+      </button>`).join('')}
+  </nav>`;
+}
+
+function footerHTML() {
+  return `
+  <footer class="footer">
+    <div class="logo-row"><span style="font-size:22px">🔥</span><strong>${h(S.name || '')}</strong></div>
+    <div>📍 ${h(S.address || '')}</div>
+    <div>🕒 ${h(S.hoursText || '')}</div>
+    <div>🛵 التوصيل خلال ${h(S.deliveryEta || '')}${Number(S.deliveryFee) ? ` · رسوم التوصيل ${money(S.deliveryFee)}` : ''}</div>
+    ${Number(S.freeDeliveryOver) ? `<div>🎉 توصيل مجاني على الطلبات فوق ${money(S.freeDeliveryOver)}</div>` : ''}
+    <div class="socials">
+      <a href="tel:${h(S.phone || '')}" aria-label="اتصال">📞</a>
+      <a href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener" aria-label="واتساب">💬</a>
+    </div>
+    <div class="credit">${h(S.name || '')} — تطبيق طلبات كامل مع لوحة إدارة وإشعارات</div>
+  </footer>`;
+}
+
+function renderCartBar() {
+  let bar = $('#cartBar');
+  const { name } = parseHash();
+  const hide = !cart.length || ['cart', 'checkout', 'login', 'signup'].includes(name) || name === 'admin';
+  if (!bar) { bar = document.createElement('div'); bar.id = 'cartBar'; bar.className = 'cart-bar'; document.body.appendChild(bar); }
+  if (hide) { bar.classList.remove('show'); return; }
+  const t = cartTotals();
+  bar.innerHTML = `<span>🛒 ${cartCount()} صنف · ${money(t.total)}</span><span class="spacer" style="flex:1"></span><span>إتمام الطلب ←</span>`;
+  bar.onclick = () => go('cart');
+  bar.classList.add('show');
+}
+
+function updateBadges() {
+  for (const [id, val] of [['#navBadge', cartCount()], ['#headBadge', cartCount()]]) {
+    const el = $(id); if (el) { el.textContent = val; el.classList.toggle('hidden', !val); }
+  }
+}
+
+function itemCardHTML(it) {
+  const badge = it.featured ? `<span class="tag hot">★ الأكثر طلبًا</span>`
+    : it.cat === 'offers' ? `<span class="tag offer">عرض</span>` : '';
+  const priceHTML = it.noPrice ? `<span class="price small muted">عرض خاص</span>`
+    : `<span class="price">${it.priceLabel ? `<span class="small muted">${h(it.priceLabel)}</span> ` : ''}
+        ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${money(it.price)}</span>`;
+  return `
+  <button class="card" data-act="item" data-id="${h(it.id)}">
+    <span class="thumb">${it.image ? `<img src="${h(it.image)}" alt="${h(it.name)}" loading="lazy">` : ''}${badge}</span>
+    <span class="body">
+      <h3>${h(it.name)}</h3>
+      ${it.desc ? `<span class="desc">${h(it.desc)}</span>` : ''}
+      <span class="foot">${priceHTML}<span class="add-btn">＋</span></span>
+    </span>
+  </button>`;
+}
+
+/* ============================== ٧) صفحة الرئيسية ============================== */
+function isOpenNow() {
+  const f = S.forceState;
+  if (f === 'open') return true;
+  if (f === 'closed') return false;
+  const hh = new Date().getHours() + new Date().getMinutes() / 60;
+  const open = Number(S.openHour || 0), close = Number(S.closeHour || 24) % 24;
+  if (Number(S.closeHour) > 24) return hh >= open || hh < close;
+  return hh >= open && hh < close;
+}
+
+function viewsHome() {
+  const open = isOpenNow();
+  const featured = MENU.filter((i) => i.featured).slice(0, 8);
+  const glimpse = MENU.slice(0, 4);
+  return `
+  ${headerHTML('home')}
+  <main class="app"><div class="wrap">
+    <section class="hero">
+      <img src="/img/ai-hero.jpg" alt="${h(S.name)}">
+      <div class="overlay"></div>
+      <div class="content">
+        <span class="pill"><span class="dot ${open ? '' : 'closed'}"></span>${open ? `مفتوح الآن · توصيل خلال ${h(S.deliveryEta || '')}` : 'مقفول حاليًا'}</span>
+        <h1>مشاوي على الجمر بأصل الطعم</h1>
+        <p>لحوم طازجة تُتبّل كل صباح وتُشوى على الفحم لحظة الطلب. اطلب من المنيو وتابع طلبك خطوة بخطوة.</p>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="#/menu">تصفح المنيو</a>
+          ${ME ? `<a class="btn btn-ghost" href="#/orders">طلباتي</a>` : `<a class="btn btn-ghost" href="#/login">تسجيل الدخول</a>`}
+        </div>
+      </div>
+    </section>
+
+    <div class="section-head"><h2>تصنيفات المنيو</h2><a class="link" href="#/menu">الكل ←</a></div>
+    <div class="cats">
+      ${CATS.map((c) => `
+        <button class="cat" data-act="cat" data-id="${h(c.id)}">
+          <span class="thumb">${c.image ? `<img src="${h(c.image)}" alt="">` : ''}<span class="emoji">${c.icon || '🍽️'}</span></span>
+          <span class="label">${h(c.name)}</span>
+        </button>`).join('')}
+    </div>
+
+    <div class="section-head"><h2>الأكثر طلبًا</h2><a class="link" href="#/menu">كل المنيو ←</a></div>
+    <div class="grid">${featured.map(itemCardHTML).join('')}</div>
+
+    <div class="section-head"><h2>لمحة من المنيو</h2><a class="link" href="#/menu">المزيد ←</a></div>
+    <div class="grid wide">
+      ${glimpse.map((it) => `
+        <button class="card row-card" data-act="item" data-id="${h(it.id)}">
+          <span class="thumb">${it.image ? `<img src="${h(it.image)}" alt="" loading="lazy">` : ''}</span>
+          <span class="body"><h3>${h(it.name)}</h3><span class="desc">${h(it.desc || '')}</span>
+          <span class="price">${it.noPrice ? 'عرض خاص' : money(it.price)}</span></span>
+        </button>`).join('')}
+    </div>
+
+    <div class="section-head"><h2>ليه تطلب مننا؟</h2></div>
+    <div class="perks">
+      <div class="perk"><div class="ico">⚡</div><h4>تحضير سريع</h4><p>طلبك يبدأ على الفحم بعد ثوانٍ من التأكيد</p></div>
+      <div class="perk"><div class="ico">📍</div><h4>تتبع مباشر</h4><p>تابع حالة طلبك من الاستلام لحد التوصيل</p></div>
+      <div class="perk"><div class="ico">💳</div><h4>دفع مرن</h4><p>${h((S.payments || []).map((p) => p.label).join(' أو '))}</p></div>
+    </div>
+  </div>${footerHTML()}</main>`;
+}
+
+/* ============================== ٨) المنيو ============================== */
+function viewsMenu(q) {
+  const catNameQ = q.get('cat');
+  const activeCat = catNameQ ? (CATS.find((c) => c.name === catNameQ) || {}).id : null;
+  const search = (q.get('q') || '').trim();
+  const sort = q.get('sort') || 'rec';
+  let list = MENU.slice();
+  if (activeCat) list = list.filter((i) => i.cat === activeCat);
+  if (search) list = list.filter((i) => (i.name + ' ' + (i.desc || '')).includes(search));
+  if (sort === 'cheap') list.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
+  if (sort === 'pricey') list.sort((a, b) => (b.price ?? -1) - (a.price ?? -1));
+  if (sort === 'hot') list.sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0));
+
+  return `
+  ${headerHTML('menu')}
+  <main class="app"><div class="wrap">
+    <div class="page-head">
+      <h1>المنيو</h1>
+      <p>${list.length} صنف${activeCat ? ` في «${h(catName(activeCat))}»` : ''}${search ? ` · نتيجة «${h(search)}»` : ''}</p>
+    </div>
+    <div style="margin:12px 0 10px"><input id="searchInput" placeholder="ابحث عن صنف… (برجر، شيش، بطاطس)" value="${h(search)}"></div>
+    <div class="chips">
+      <button class="chip ${!activeCat ? 'active' : ''}" data-act="filter" data-id="">الكل</button>
+      ${CATS.map((c) => `<button class="chip ${activeCat === c.id ? 'active' : ''}" data-act="filter" data-id="${h(c.id)}">${c.icon || ''} ${h(c.name)}</button>`).join('')}
+    </div>
+    <div class="section-head" style="margin-top:14px">
+      <span class="small muted">ترتيب حسب</span>
+      <select id="sortSel" style="width:auto;padding:8px 10px;font-size:13px">
+        <option value="rec" ${sort === 'rec' ? 'selected' : ''}>المقترح</option>
+        <option value="hot" ${sort === 'hot' ? 'selected' : ''}>الأكثر طلبًا</option>
+        <option value="cheap" ${sort === 'cheap' ? 'selected' : ''}>الأرخص</option>
+        <option value="pricey" ${sort === 'pricey' ? 'selected' : ''}>الأغلى</option>
+      </select>
+    </div>
+    ${list.length ? `<div class="grid">${list.map(itemCardHTML).join('')}</div>`
+      : `<div class="empty"><div class="big">🔍</div><h3>مفيش نتائج</h3><p>جرّب كلمة تانية</p></div>`}
+  </div>${footerHTML()}</main>`;
+}
+
+/* ============================== ٩) شيت الصنف ============================== */
+let sheet = { item: null, addons: [], qty: 1, note: '' };
+
+function openSheet(id) {
+  const it = byId(id); if (!it) return;
+  sheet = { item: it, addons: [], qty: 1, note: '' };
+  let bd = $('#sheet');
+  if (!bd) { bd = document.createElement('div'); bd.id = 'sheet'; bd.className = 'sheet-backdrop'; document.body.appendChild(bd); }
+  bd.innerHTML = sheetHTML(); bd.classList.add('show');
+  bd.onclick = (e) => { if (e.target === bd || e.target.closest('[data-act="sheet-close"]')) closeSheet(); };
+  document.body.style.overflow = 'hidden';
+}
+function closeSheet() { const bd = $('#sheet'); if (bd) bd.classList.remove('show'); document.body.style.overflow = ''; }
+
+function sheetHTML() {
+  const it = sheet.item;
+  const list = (S.addons && (S.addons[it.cat] || S.addons.default)) || [];
+  const extras = sheet.addons.reduce((s, a) => s + a.price, 0);
+  const total = ((it.price || 0) + extras) * sheet.qty;
+  return `
+  <div class="sheet" role="dialog">
+    <div class="hero-img">
+      ${it.image ? `<img src="${h(it.image)}" alt="${h(it.name)}">` : ''}
+      <button class="close" data-act="sheet-close">✕</button>
+    </div>
+    <div class="content">
+      <h2>${h(it.name)}</h2>
+      ${it.priceLabel ? `<div class="small muted">${h(it.priceLabel)}</div>` : ''}
+      ${it.desc ? `<p class="muted small">${h(it.desc)}</p>` : ''}
+      <div class="row" style="margin:8px 0 14px">
+        ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span>` : ''}
+        <span class="price" style="font-size:19px">${it.price == null ? 'عرض خاص' : money(it.price)}</span>
+      </div>
+      ${it.noPrice ? `
+        <p class="small muted">العرض ده بيتجهّز على واتساب — ابعتلنا وهنأكدلك التفاصيل.</p>
+        <div class="sheet-foot">
+          <a class="btn btn-primary btn-block" target="_blank" rel="noopener"
+             href="https://wa.me/${h(S.whatsapp)}?text=${encodeURIComponent('مرحبًا ' + S.name + ' 👋\nعايز أطلب: ' + it.name + '\n' + (it.desc || ''))}">💬 اطلب العرض على واتساب</a>
+        </div>` : `
+        ${list.length ? `
+          <div style="margin-bottom:14px">
+            <strong>إضافات اختيارية</strong>
+            <div style="margin-top:8px">
+              ${list.map((a, i) => `
+                <button class="opt ${sheet.addons.includes(a) ? 'on' : ''}" data-act="addon" data-i="${i}">
+                  <span><span class="tick">✓</span> ${h(a.name)}</span><span class="muted small">+ ${money(a.price)}</span>
+                </button>`).join('')}
+            </div>
+          </div>` : ''}
+        <div style="margin-bottom:14px">
+          <strong>ملاحظة (اختياري)</strong>
+          <input id="sheetNote" placeholder="مثال: من غير مخلل…" value="${h(sheet.note)}" style="margin-top:8px">
+        </div>
+        <div class="row" style="justify-content:space-between">
+          <span class="qty"><button data-act="sheet-minus">−</button><span class="n">${sheet.qty}</span><button data-act="sheet-plus">+</button></span>
+          <span class="small muted">سعر الوحدة ${money((it.price || 0) + extras)}</span>
+        </div>
+        <div class="sheet-foot">
+          <button class="btn btn-primary btn-block" data-act="sheet-add">أضف للسلة — ${money(total)}</button>
+        </div>`}
+    </div>
+  </div>`;
+}
+function refreshSheet() {
+  const bd = $('#sheet'); if (bd && bd.classList.contains('show')) {
+    const n = $('#sheetNote'); if (n) sheet.note = n.value;
+    bd.innerHTML = sheetHTML();
+  }
+}
+
+/* ============================== ١٠) السلة والشيك أوت ============================== */
+function viewsCart() {
+  if (!cart.length) {
+    return `${headerHTML('cart')}<main class="app"><div class="wrap">
+      <div class="page-head"><h1>السلة</h1></div>
+      <div class="empty"><div class="big">🛒</div><h3>سلتك فاضية</h3><p>اختار من المنيو وابدأ طلبك</p>
+      <a class="btn btn-primary" style="margin-top:14px" href="#/menu">تصفح المنيو</a></div>
+    </div>${footerHTML()}</main>`;
+  }
+  const t = cartTotals();
+  const short = Math.max(0, Number(S.minOrder || 0) - t.subtotal);
+  return `
+  ${headerHTML('cart')}<main class="app"><div class="wrap">
+    <div class="page-head"><h1>السلة</h1><p>${cartCount()} صنف</p></div>
+    <div class="list" style="margin-top:14px">
+      ${cart.map((c) => `
+        <div class="box">
+          <div class="row" style="align-items:flex-start">
+            <div class="tbl-thumb" style="width:74px;height:74px">${c.image ? `<img src="${h(c.image)}" alt="">` : ''}</div>
+            <div style="flex:1;min-width:0">
+              <div class="row" style="justify-content:space-between"><strong>${h(c.name)}</strong>
+                <button class="muted" data-act="rm" data-key="${h(c.key)}">✕</button></div>
+              ${c.addons && c.addons.length ? `<div class="small muted">إضافات: ${h(c.addons.map((a) => a.name).join('، '))}</div>` : ''}
+              <div class="row" style="justify-content:space-between;margin-top:10px">
+                <span class="qty"><button data-act="minus" data-key="${h(c.key)}">−</button><span class="n">${c.qty}</span><button data-act="plus" data-key="${h(c.key)}">+</button></span>
+                <span class="price">${money(lineTotal(c))}</span>
+              </div>
+              <div style="margin-top:10px"><input placeholder="ملاحظة على الصنف" value="${h(c.note || '')}" data-note="${h(c.key)}" style="padding:9px 12px;font-size:13px"></div>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>
+
+    <div class="box" style="margin-top:12px">
+      <strong>كود الخصم</strong>
+      <div class="row" style="margin-top:8px">
+        <input id="promoInput" placeholder="اكتب الكود…" value="${h(promoCode)}">
+        <button class="btn btn-sm" data-act="promo">تطبيق</button>
+      </div>
+      <div class="small muted" style="margin-top:8px">أكواد متاحة: ${(S.promos || []).map((x) => `<b>${h(x.code)}</b>`).join(' · ')}</div>
+    </div>
+
+    <div class="box" style="margin-top:12px">
+      <div class="line"><span>المجموع</span><span>${money(t.subtotal)}</span></div>
+      <div class="line"><span>التوصيل</span><span>${t.delivery ? money(t.delivery) : (cart.length ? 'مجاني 🎉' : '—')}</span></div>
+      ${t.discount ? `<div class="line" style="color:var(--green)"><span>خصم</span><span>− ${money(t.discount)}</span></div>` : ''}
+      <div class="line total"><span>الإجمالي</span><span class="price">${money(t.total)}</span></div>
+    </div>
+
+    ${short > 0 ? `<div class="box center" style="margin-top:12px;border-color:rgba(255,176,32,.35)">أقل مبلغ للطلب ${money(S.minOrder)} — باقي ${money(short)}</div>` : ''}
+    <button class="btn btn-primary btn-block" style="margin-top:14px" data-act="nav" data-to="checkout" ${short > 0 ? 'disabled' : ''}>
+      متابعة الطلب — ${money(t.total)}
+    </button>
+    <a class="btn btn-ghost btn-block" style="margin-top:8px" href="#/menu">أضف أصناف تانية</a>
+  </div>${footerHTML()}</main>`;
+}
+
+const TIME_SLOTS = ['في أقرب وقت', 'بعد ٣٠ دقيقة', 'بعد ساعة', 'بعد ساعتين'];
+
+function viewsCheckout() {
+  if (!ME) {
+    return `${headerHTML('checkout')}<main class="app"><div class="wrap">
+      <div class="empty" style="padding-top:60px"><div class="big">🔐</div><h3>سجّل الدخول الأول</h3>
+      <p>عشان نربط الطلب بحسابك وتقدر تتابعه في «طلباتي» من أي وقت</p>
+      <div class="btn-row" style="justify-content:center;margin-top:14px">
+        <a class="btn btn-primary" href="#/login?return=checkout">تسجيل الدخول</a>
+        <a class="btn btn-ghost" href="#/signup?return=checkout">إنشاء حساب</a>
+      </div></div></div></main>`;
+  }
+  if (!cart.length) {
+    return `${headerHTML('checkout')}<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
+      <div class="big">🛒</div><h3>السلة فاضية</h3><a class="btn btn-primary" style="margin-top:14px" href="#/menu">تصفح المنيو</a></div></div></main>`;
+  }
+  const t = cartTotals();
+  return `
+  ${headerHTML('checkout')}<main class="app"><div class="wrap">
+    <div class="page-head"><h1>إتمام الطلب</h1><p>${cartCount()} صنف · الإجمالي ${money(t.total)}</p></div>
+    <form id="checkoutForm" class="list" style="margin-top:14px">
+      <div class="box">
+        <div class="grid2">
+          <div><label class="lbl">الاسم *</label><input name="name" value="${h(ME.name || '')}" required></div>
+          <div><label class="lbl">الهاتف *</label><input name="phone" value="${h(ME.phone || '')}" inputmode="tel" placeholder="01xxxxxxxxx" required></div>
+          <div><label class="lbl">المنطقة</label><input name="area" value="${h(ME.area || '')}" placeholder="المعادي، مدينة نصر…"></div>
+          <div><label class="lbl">وقت التوصيل</label><select name="time">${TIME_SLOTS.map((x) => `<option>${h(x)}</option>`).join('')}</select></div>
+        </div>
+        <div style="margin-top:10px"><label class="lbl">العنوان بالتفصيل *</label><textarea name="address" rows="2" placeholder="الشارع، رقم العمارة، الدور، علامة مميزة" required>${h(ME.address || '')}</textarea></div>
+        <div style="margin-top:10px"><label class="lbl">ملاحظات للمطعم</label><textarea name="notes" rows="2" placeholder="من غير شطة، كاتشب زيادة…"></textarea></div>
+      </div>
+      <div class="box">
+        <strong>طريقة الدفع</strong>
+        <div style="margin-top:8px">
+          ${(S.payments || []).map((p, i) => `
+            <label class="opt ${i === 0 ? 'on' : ''}" data-pay="${h(p.id)}">
+              <span>
+                <span>${h(p.label)}${p.kind === 'online' ? ' <span class="mini-chip">أونلاين</span>' : ''}</span>
+                ${p.note ? `<span class="small muted" style="display:block">${h(p.note)}</span>` : ''}
+              </span>
+              <input type="radio" name="payment" value="${h(p.id)}" ${i === 0 ? 'checked' : ''}>
+            </label>`).join('')}
+        </div>
+        ${(S.onlinePayment && S.onlinePayment.enabled) ? `<p class="small muted" style="margin:8px 0 0">${S.onlinePayment.isDemo
+          ? '💳 الدفع الأونلاين في وضع المحاكاة (تجربة) — الطلب بيتأكد بعد نجاح الدفع.'
+          : '💳 هتتوجّه لصفحة دفع آمنة، والطلب بيتأكد بعد نجاح العملية.'}</p>` : ''}
+      </div>
+
+      ${(S.whatsappNotify && S.whatsappNotify.enabled) ? `
+      <div class="box">
+        <label class="opt" style="margin:0;cursor:pointer">
+          <span>
+            <span>💬 ابعتلي تحديثات الطلب على واتساب</span>
+            <span class="small muted" style="display:block">رسالة عند كل تغيير في حالة طلبك (تأكيد، تجهيز، خرج للتوصيل، تم التوصيل)</span>
+          </span>
+          <input type="checkbox" name="notifyWhatsapp" ${ME.notifyWhatsapp !== false ? 'checked' : ''}>
+        </label>
+      </div>` : ''}
+      <div class="box">
+        <div class="line"><span>المجموع</span><span>${money(t.subtotal)}</span></div>
+        <div class="line"><span>التوصيل</span><span>${t.delivery ? money(t.delivery) : 'مجاني 🎉'}</span></div>
+        ${t.discount ? `<div class="line" style="color:var(--green)"><span>خصم</span><span>− ${money(t.discount)}</span></div>` : ''}
+        <div class="line total"><span>الإجمالي</span><span class="price">${money(t.total)}</span></div>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit">تأكيد الطلب 🍖</button>
+      <p class="small muted center">بعد التأكيد هتلاقي الطلب في «طلباتي» وتقدر تتابع حالته لحظة بلحظة.</p>
+    </form>
+  </div>${footerHTML()}</main>`;
+}
+
+/* ============================== ١١) طلباتي والتتبع ============================== */
+const MY = { orders: [], loaded: false };
+
+async function loadMyOrders(force) {
+  if (!ME) { MY.orders = []; MY.loaded = true; return; }
+  if (MY.loaded && !force) return;
+  try { MY.orders = (await api.req('/api/orders/mine')).orders; MY.loaded = true; } catch { MY.orders = []; }
+}
+
+function viewsOrders() {
+  if (!ME) {
+    return `${headerHTML('orders')}<main class="app"><div class="wrap">
+      <div class="empty" style="padding-top:60px"><div class="big">🔐</div><h3>سجّل الدخول</h3>
+      <p>عشان تشوف طلباتك السابقة وتتابعها</p>
+      <div class="btn-row" style="justify-content:center;margin-top:14px">
+        <a class="btn btn-primary" href="#/login?return=orders">تسجيل الدخول</a>
+        <a class="btn btn-ghost" href="#/signup?return=orders">إنشاء حساب</a>
+      </div></div></div></main>`;
+  }
+  const list = MY.orders;
+  return `
+  ${headerHTML('orders')}<main class="app"><div class="wrap">
+    <div class="page-head"><h1>طلباتي</h1><p>${list.length} طلب مرتبط بحسابك (${h(ME.email)})</p></div>
+    ${!list.length ? `<div class="empty"><div class="big">🧾</div><h3>مفيش طلبات لسه</h3>
+      <a class="btn btn-primary" style="margin-top:14px" href="#/menu">ابدأ طلبك</a></div>` : `
+    <div class="list" style="margin-top:14px">
+      ${list.map((o) => `
+        <button class="card" style="text-align:start" data-act="nav" data-to="order/${h(o.id)}">
+          <div class="box" style="border:0;background:none;padding:14px;width:100%">
+            <div class="row" style="justify-content:space-between">
+              <strong>طلب ${h(o.id)}</strong>${statusChip(o.status)}
+            </div>
+            <div class="small muted" style="margin-top:6px">${h(fmtDT(o.createdAt))} · ${o.items.length} صنف</div>
+            <div class="small" style="margin-top:8px">${h(o.items.map((i) => `${i.name} ×${i.qty}`).join('، '))}</div>
+            <div class="row" style="justify-content:space-between;margin-top:10px">
+              <span class="price">${money(o.total)}</span><span style="color:var(--ember-2);font-weight:700">تتبع الطلب ←</span>
+            </div>
+          </div>
+        </button>`).join('')}
+    </div>`}
+  </div>${footerHTML()}</main>`;
+}
+
+function timelineHTML(o) {
+  const flow = FLOW();
+  const idx = flow.findIndex((s) => s.id === o.status);
+  const cancelled = o.status === 'cancelled';
+  const hist = {};
+  for (const hh of o.history || []) hist[hh.status] = hh.at;
+  return `
+  <div class="steps">
+    ${flow.map((s, i) => {
+      const done = !cancelled && i < idx, now = !cancelled && i === idx;
+      return `<div class="step ${done ? 'done' : now ? 'now' : 'off'}">
+        <span class="bubble">${done ? '✓' : s.emoji}</span>
+        <h4>${h(s.label)} ${hist[s.id] && (done || now) ? `<span class="small muted">· ${fmtT(hist[s.id])}</span>` : ''}</h4>
+        <p>${h(s.note)}</p></div>`;
+    }).join('')}
+    ${cancelled ? `<div class="step now"><span class="bubble">✖️</span><h4>ملغي</h4><p>الطلب اتلغى${hist.cancelled ? ' · ' + fmtT(hist.cancelled) : ''}</p></div>` : ''}
+  </div>`;
+}
+
+function viewOrderPage(id) {
+  const o = MY.orders.find((x) => x.id === id);
+  if (!o) {
+    return `${headerHTML('orders')}<main class="app"><div class="wrap">
+      <div class="empty" style="padding-top:50px"><div class="big">⏳</div><h3>هنجيب الطلب…</h3></div>
+      <div class="center"><a class="btn btn-ghost" href="#/orders">كل الطلبات</a></div></div></main>`;
+  }
+  const flow = FLOW();
+  const idx = flow.findIndex((s) => s.id === o.status);
+  const pct = o.status === 'cancelled' ? 100 : Math.round(((idx + 1) / flow.length) * 100);
+  return `
+  ${headerHTML('orders')}<main class="app"><div class="wrap">
+    <div class="page-head">
+      <a class="small muted" href="#/orders">→ كل الطلبات</a>
+      <h1>طلب ${h(o.id)}</h1><p>${h(fmtDT(o.createdAt))}</p>
+    </div>
+    <div class="box" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between">${statusChip(o.status)}
+        <span class="small muted">آخر تحديث ${h(timeAgo(o.updatedAt || o.createdAt))}</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <p class="small muted" style="margin:8px 0 0">دي حالة الطلب (مش تتبع GPS) — بتتحدّث مباشرة من المطعم.</p>
+    </div>
+    <div class="box" style="margin-top:12px">
+      <div class="row" style="justify-content:space-between">
+        <strong>💳 الدفع</strong>${payChip(o)}
+      </div>
+      <div class="line"><span class="muted">الطريقة</span><span>${h(((S.payments || []).find((p) => p.id === o.payment) || {}).label || o.payment)}</span></div>
+      ${o.paidAt ? `<div class="line"><span class="muted">تم الدفع</span><span class="small">${h(fmtDT(o.paidAt))}</span></div>` : ''}
+      ${(o.payment_status === 'pending' || o.payment_status === 'failed') ? `
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-primary btn-sm" data-act="pay-now" data-id="${h(o.id)}">ادفع الآن ${money(o.total)} 💳</button>
+          <a class="btn btn-ghost btn-sm" href="#/menu">الدفع عند الاستلام؟ كلمنا</a>
+        </div>` : ''}
+      ${o.refundedAt ? `<div class="small muted" style="margin-top:8px">تم إرجاع المبلغ بتاريخ ${h(fmtDT(o.refundedAt))}</div>` : ''}
+    </div>
+
+    <div class="box" style="margin-top:12px">${timelineHTML(o)}</div>
+    <div class="box" style="margin-top:12px">
+      <strong>تفاصيل الطلب (Order Items)</strong>
+      ${o.items.map((i) => `
+        <div class="line"><span>${h(i.name)} ×${i.qty}
+          ${i.addons && i.addons.length ? `<div class="small muted">${h(i.addons.map((a) => a.name).join('، '))}</div>` : ''}
+          ${i.note ? `<div class="small muted">📝 ${h(i.note)}</div>` : ''}</span>
+          <span>${money(i.line_total || (i.price + (i.addons || []).reduce((a, x) => a + x.price, 0)) * i.qty)}</span></div>`).join('')}
+      <div class="line"><span>المجموع</span><span>${money(o.subtotal)}</span></div>
+      <div class="line"><span>التوصيل</span><span>${o.delivery ? money(o.delivery) : 'مجاني'}</span></div>
+      ${o.discount ? `<div class="line" style="color:var(--green)"><span>خصم${o.promo ? ' (' + h(o.promo) + ')' : ''}</span><span>− ${money(o.discount)}</span></div>` : ''}
+      <div class="line total"><span>الإجمالي</span><span class="price">${money(o.total)}</span></div>
+      <div class="line"><span class="muted">طريقة الدفع</span><span>${h(((S.payments || []).find((p) => p.id === o.payment) || {}).label || o.payment)}</span></div>
+    </div>
+    <div class="box" style="margin-top:12px">
+      <strong>بيانات التوصيل</strong>
+      <div class="line"><span class="muted">الاسم</span><span>${h(o.customer.name)}</span></div>
+      <div class="line"><span class="muted">الهاتف</span><span>${h(o.customer.phone)}</span></div>
+      <div class="line"><span class="muted">العنوان</span><span class="small">${h(o.customer.area ? o.customer.area + ' — ' : '')}${h(o.customer.address)}</span></div>
+      <div class="line"><span class="muted">وقت التوصيل</span><span>${h(o.customer.time || 'في أقرب وقت')}</span></div>
+      ${o.customer.notes ? `<div class="line"><span class="muted">ملاحظات</span><span class="small">${h(o.customer.notes)}</span></div>` : ''}
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <a class="btn btn-ghost" href="tel:${h(S.phone)}">📞 اتصل بالمطعم</a>
+      ${['new', 'received'].includes(o.status) ? `<button class="btn btn-danger" data-act="cancelOrder" data-id="${h(o.id)}">إلغاء الطلب</button>` : ''}
+    </div>
+  </div>${footerHTML()}</main>`;
+}
+
+/* ============================== ١٢) الحساب ============================== */
+function authPageHTML(kind, q) {
+  const ret = q.get('return') || '';
+  const back = ret ? `<input type="hidden" name="return" value="${h(ret)}">` : '';
+  const isLogin = kind === 'login';
+  const isReset = kind === 'reset';
+  const token = q.get('token') || '';
+  return `
+  ${headerHTML('account')}<main class="app"><div class="wrap" style="max-width:460px">
+    <div class="page-head"><h1>${isLogin ? 'تسجيل الدخول' : isReset ? 'كلمة سر جديدة' : 'إنشاء حساب'}</h1>
+      <p>${isLogin ? 'ادخل على حسابك عشان تتابع طلباتك' : isReset ? 'اكتب كلمة السر الجديدة' : 'حساب جديد بيتعمل في ثوانٍ'}</p></div>
+    <form id="${isLogin ? 'loginForm' : isReset ? 'resetForm' : 'signupForm'}" class="box" style="margin-top:14px">
+      ${back}${isReset ? `<input type="hidden" name="token" value="${h(token)}">` : ''}
+      ${isLogin || isReset ? '' : `
+        <div style="margin-bottom:10px"><label class="lbl">الاسم</label><input name="name" required placeholder="اسمك"></div>
+        <div style="margin-bottom:10px"><label class="lbl">رقم الهاتف</label><input name="phone" inputmode="tel" placeholder="01xxxxxxxxx"></div>`}
+      ${isReset ? '' : `<div style="margin-bottom:10px"><label class="lbl">الإيميل</label><input name="email" type="email" required placeholder="you@example.com"></div>`}
+      <div style="margin-bottom:14px"><label class="lbl">كلمة السر${isLogin ? '' : ' (٦ أحرف على الأقل)'}</label>
+        <input name="password" type="password" required minlength="6" placeholder="••••••"></div>
+      <button class="btn btn-primary btn-block" type="submit">${isLogin ? 'دخول' : isReset ? 'حفظ كلمة السر' : 'إنشاء الحساب'}</button>
+      <div class="center small muted" style="margin-top:12px">
+        ${isLogin
+          ? `مش عندك حساب؟ <a href="#/signup${ret ? '?return=' + h(ret) : ''}" style="color:var(--ember-2)">أنشئ حساب</a>
+             · <a href="#/forgot" style="color:var(--ember-2)">نسيت كلمة السر؟</a>`
+          : isReset ? `<a href="#/login" style="color:var(--ember-2)">رجوع لتسجيل الدخول</a>`
+          : `عندك حساب؟ <a href="#/login${ret ? '?return=' + h(ret) : ''}" style="color:var(--ember-2)">سجّل الدخول</a>`}
+      </div>
+      ${isLogin ? `<div class="center" style="margin-top:14px">
+        <button type="button" class="btn btn-sm btn-ghost" data-act="demo">دخول سريع بحساب تجريبي (عميل)</button>
+        <div class="small muted" style="margin-top:8px">للتجربة: admin@bbq.app/admin123 (أدمن) · supervisor@bbq.app/super123 (مشرف) · demo@bbq.app/demo123 (عميل)</div>
+      </div>` : ''}
+    </form>
+  </div>${footerHTML()}</main>`;
+}
+
+function viewsAccount() {
+  if (!ME) return authPageHTML('login', new URLSearchParams(''));
+  const staff = isStaff();
+  return `
+  ${headerHTML('account')}<main class="app"><div class="wrap">
+    <div class="page-head"><h1>حسابي</h1><p>${h(ME.email)} · <span class="role-chip role-${h(ME.role)}">${ME.role === 'admin' ? 'أدمن' : ME.role === 'supervisor' ? 'مشرف' : 'عميل'}</span></p></div>
+    <div class="kpis" style="margin-top:14px;grid-template-columns:repeat(3,1fr)">
+      <div class="kpi"><b>${MY.orders.length}</b><span>طلبي</span></div>
+      <div class="kpi"><b>${money(MY.orders.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + o.total, 0))}</b><span>إجمالي مشترياتي</span></div>
+      <div class="kpi"><b>${cartCount()}</b><span>في السلة</span></div>
+    </div>
+    ${staff ? `<div class="box" style="margin-top:12px;border-color:rgba(255,176,32,.35)">
+      <strong>أنت مسجّل كـ${ME.role === 'admin' ? 'أدمن' : 'مشرف'}</strong>
+      <p class="small muted" style="margin:6px 0 10px">عندك وصول للوحة الإدارة: الطلبات، العملاء، الحالات، والإشعارات.</p>
+      <a class="btn btn-primary btn-sm" href="#/admin">افتح لوحة الإدارة</a>
+    </div>` : ''}
+    <form id="profileForm" class="box" style="margin-top:12px">
+      <strong>بياناتي</strong>
+      <div class="grid2" style="margin-top:10px">
+        <div><label class="lbl">الاسم</label><input name="name" value="${h(ME.name || '')}"></div>
+        <div><label class="lbl">الهاتف</label><input name="phone" value="${h(ME.phone || '')}" inputmode="tel" placeholder="01xxxxxxxxx"></div>
+        <div><label class="lbl">المنطقة</label><input name="area" value="${h(ME.area || '')}"></div>
+        <div><label class="lbl">العنوان</label><input name="address" value="${h(ME.address || '')}"></div>
+      </div>
+      ${(S.whatsappNotify && S.whatsappNotify.enabled) ? `
+      <label class="opt" style="margin:12px 0 0;cursor:pointer">
+        <span>
+          <span>💬 تحديثات الطلب على واتساب</span>
+          <span class="small muted" style="display:block">هنبعتلك حالة طلبك على الرقم اللي فوق</span>
+        </span>
+        <input type="checkbox" name="notifyWhatsapp" ${ME.notifyWhatsapp !== false ? 'checked' : ''}>
+      </label>` : ''}
+      <button class="btn btn-primary btn-block" style="margin-top:10px" type="submit">حفظ البيانات</button>
+    </form>
+    <div class="btn-row" style="margin-top:12px">
+      <a class="btn btn-ghost" href="#/orders">🧾 طلباتي</a>
+      ${staff ? `<a class="btn btn-ghost" href="#/admin">🧑‍🍳 لوحة الإدارة</a>` : ''}
+      <button class="btn btn-danger" data-act="logout">تسجيل الخروج</button>
+    </div>
+  </div>${footerHTML()}</main>`;
+}
+
+/* ============================== ١٣) لوحة الإدارة ============================== */
+const AD = { tab: 'dash', orders: [], stats: null, users: [], customers: [], q: '', status: 'all', payment: 'all', range: 'all', editing: null,
+             payCfg: null, waCfg: null, waTemplates: null, waLog: [] };
+
+function adminTabsHTML(active) {
+  const tabs = [
+    ['dash', '📊 لوحة المتابعة'],
+    ['orders', '🧾 الطلبات'],
+    ['customers', '👥 العملاء'],
+    ...(isAdmin() ? [['menu', '🍔 المنيو'], ['users', '🔑 المستخدمون'],
+                     ['payments', '💳 الدفع'], ['whatsapp', '💬 واتساب'], ['settings', '⚙️ الإعدادات']] : []),
+  ];
+  return `<div class="admin-tabs">${tabs.map(([id, label]) =>
+    `<button class="admin-tab ${active === id ? 'on' : ''}" data-act="admin-tab" data-id="${id}">${label}</button>`).join('')}</div>`;
+}
+
+async function loadAdminOrders() {
+  const p = new URLSearchParams();
+  if (AD.status && AD.status !== 'all') p.set('status', AD.status);
+  if (AD.payment && AD.payment !== 'all') p.set('payment', AD.payment);
+  if (AD.q) p.set('q', AD.q);
+  if (AD.range === 'today') p.set('from', new Date().toDateString());
+  AD.orders = (await api.req('/api/admin/orders?' + p.toString())).orders;
+}
+async function loadAdminStats() { AD.stats = await api.req('/api/admin/stats'); }
+
+function viewsAdmin(q) {
+  if (!ME) {
+    return `${headerHTML('admin')}<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
+      <div class="big">🔐</div><h3>سجّل الدخول</h3><p>لوحة الإدارة للمشرفين والأدمن فقط</p>
+      <a class="btn btn-primary" style="margin-top:14px" href="#/login?return=admin">تسجيل الدخول</a></div></div></main>`;
+  }
+  if (!isStaff()) {
+    /* الحماية الحقيقية على السيرفر — دي مجرد رسالة للمستخدم */
+    return `${headerHTML('admin')}<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
+      <div class="big">🚫</div><h3>الصفحة دي للمشرفين والأدمن بس</h3>
+      <p>حسابك مسجّل كعميل (${h(ME.email)}) — الصلاحيات بتتفحص على السيرفر مش بس إخفاء الأزرار.</p>
+      <a class="btn btn-primary" style="margin-top:14px" href="#/">الرئيسية</a></div></div></main>`;
+  }
+  const tab = q.get('tab') || AD.tab;
+  AD.tab = tab;
+  let body = '';
+  if (tab === 'dash') body = adminDashHTML();
+  else if (tab === 'orders') body = adminOrdersHTML();
+  else if (tab === 'customers') body = adminCustomersHTML();
+  else if (tab === 'menu') body = isAdmin() ? adminMenuHTML() : deniedHTML();
+  else if (tab === 'users') body = isAdmin() ? adminUsersHTML() : deniedHTML();
+  else if (tab === 'payments') body = isAdmin() ? adminPaymentsHTML() : deniedHTML();
+  else if (tab === 'whatsapp') body = isAdmin() ? adminWhatsappHTML() : deniedHTML();
+  else if (tab === 'settings') body = isAdmin() ? adminSettingsHTML() : deniedHTML();
+
+  return `
+  ${headerHTML('admin')}<main class="app"><div class="wrap">
+    <div class="page-head"><h1>لوحة الإدارة</h1>
+      <p>${h(ME.name || ME.email)} · <span class="role-chip role-${h(ME.role)}">${ME.role === 'admin' ? 'أدمن' : 'مشرف'}</span>${AD.stats ? ` · ${AD.stats.today.orders} طلب النهارده` : ''}</p></div>
+    ${adminTabsHTML(tab)}
+    <div id="adminBody" style="margin-top:14px">${body}</div>
+  </div>${footerHTML()}</main>`;
+}
+
+const deniedHTML = () => `<div class="empty"><div class="big">🔒</div><h3>للأدمن فقط</h3></div>`;
+
+function adminDashHTML() {
+  const s = AD.stats;
+  if (!s) return `<div class="empty"><div class="big">⏳</div><h3>بيحمّل…</h3></div>`;
+  const c = s.today.counts || {};
+  const order = ['new', 'received', 'preparing', 'on_way', 'delivered', 'cancelled'];
+  return `
+  <div class="kpis">
+    <div class="kpi hl"><b>${s.today.orders}</b><span>طلبات اليوم</span></div>
+    <div class="kpi"><b>${c.new || 0}</b><span>طلبات جديدة</span></div>
+    <div class="kpi"><b>${c.received || 0}</b><span>تم استلامها</span></div>
+    <div class="kpi"><b>${c.preparing || 0}</b><span>جاري التجهيز</span></div>
+    <div class="kpi"><b>${c.on_way || 0}</b><span>خرجت للتوصيل</span></div>
+    <div class="kpi"><b>${c.delivered || 0}</b><span>تم التوصيل</span></div>
+    <div class="kpi"><b>${c.cancelled || 0}</b><span>ملغية</span></div>
+    <div class="kpi hl"><b>${money(s.today.sales)}</b><span>إجمالي مبيعات اليوم</span></div>
+    <div class="kpi"><b>${s.today.paidOrders || 0}</b><span>طلبات مدفوعة</span></div>
+    <div class="kpi hl"><b>${money(s.today.paidSales || 0)}</b><span>مبيعات محصّلة اليوم</span></div>
+  </div>
+  <div class="box" style="margin-top:12px">
+    <div class="row" style="justify-content:space-between">
+      <strong>حالة المطعم: ${isOpenNow() ? '🟢 مفتوح' : '🔴 مقفول'}${S.forceState ? ' (يدوي)' : ''}</strong>
+      <span class="small muted">الإجمالي الكلي: ${s.all.orders} طلب · ${money(s.all.sales)}</span>
+    </div>
+    ${isAdmin() ? `<div class="btn-row" style="margin-top:10px">
+      <button class="btn btn-sm ${S.forceState === 'open' ? 'btn-primary' : 'btn-ghost'}" data-act="force" data-v="open">فتح يدوي</button>
+      <button class="btn btn-sm ${S.forceState === 'closed' ? 'btn-primary' : 'btn-ghost'}" data-act="force" data-v="closed">قفل يدوي</button>
+      <button class="btn btn-sm ${!S.forceState ? 'btn-primary' : 'btn-ghost'}" data-act="force" data-v="">تلقائي حسب المواعيد</button>
+    </div>` : ''}
+  </div>
+  <div class="section-head"><h2>آخر الطلبات</h2><button class="link" data-act="admin-tab" data-id="orders">إدارة الطلبات ←</button></div>
+  ${AD.orders.length ? `<div class="list">${AD.orders.slice(0, 6).map(orderRowHTML).join('')}</div>`
+    : `<div class="empty"><div class="big">🍽️</div><h3>مفيش طلبات لسه</h3></div>`}`;
+}
+
+function orderRowHTML(o) {
+  const flow = FLOW();
+  const i = flow.findIndex((s) => s.id === o.status);
+  const next = flow[i + 1];
+  return `
+  <div class="row-line" style="flex-wrap:wrap">
+    <div class="grow">
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap">
+        <strong>${h(o.id)} · ${h(o.customer.name)}</strong>
+        <span class="row" style="gap:6px">${payChip(o)}${statusChip(o.status)}</span>
+      </div>
+      <div class="small muted" style="margin-top:3px">${h(fmtDT(o.createdAt))} · ${h(o.customer.phone)}${o.customer.area ? ' · ' + h(o.customer.area) : ''}</div>
+      <div class="small" style="margin-top:5px">${h(o.items.map((x) => `${x.name} ×${x.qty}`).join('، '))}</div>
+    </div>
+    <div class="row" style="gap:6px">
+      <span class="price">${money(o.total)}</span>
+      <button class="btn btn-sm btn-ghost" data-act="order-detail" data-id="${h(o.id)}">تفاصيل</button>
+      ${next ? `<button class="btn btn-sm btn-primary" data-act="set-status" data-id="${h(o.id)}" data-v="${h(next.id)}">➜ ${h(next.label)}</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function adminOrdersHTML() {
+  const counts = (AD.stats && AD.stats.today.counts) || {};
+  const pc = (AD.stats && AD.stats.today.payCounts) || null;
+  const statuses = [{ id: 'all', label: 'الكل', emoji: '📦' }, ...(S.statuses || [])];
+  return `
+  <div class="box">
+    <div class="row" style="gap:8px">
+      <input id="adminSearch" placeholder="ابحث: رقم الطلب، اسم، هاتف، عنوان، إيميل…" value="${h(AD.q)}">
+      <button class="btn btn-sm ${AD.range === 'today' ? 'btn-primary' : 'btn-ghost'}" data-act="admin-range" data-v="${AD.range === 'today' ? 'all' : 'today'}">${AD.range === 'today' ? 'كل الأيام' : 'النهارده بس'}</button>
+    </div>
+    <div class="chips" style="margin-top:10px">
+      ${statuses.map((s) => `<button class="chip ${AD.status === s.id ? 'active' : ''}" data-act="admin-filter" data-id="${s.id}">
+        ${s.emoji || ''} ${h(s.label)}${s.id !== 'all' ? `<span class="n">${counts[s.id] || 0}</span>` : ''}</button>`).join('')}
+    </div>
+    <div class="chips" style="margin-top:8px">
+      ${[['all', '💳 كل المدفوعات'], ['paid', '✅ مدفوع'], ['pending', '⏳ بانتظار الدفع'], ['unpaid', '💵 عند الاستلام'], ['failed', '⚠️ فشل'], ['refunded', '↩️ مرتجع']]
+        .map(([id, label]) => `<button class="chip ${AD.payment === id ? 'active' : ''}" data-act="admin-pay-filter" data-id="${id}">${label}${id !== 'all' && pc ? `<span class="n">${pc[id] || 0}</span>` : ''}</button>`).join('')}
+    </div>
+  </div>
+  <p class="small muted" style="margin:12px 2px">${AD.orders.length} طلب معروض</p>
+  ${AD.orders.length ? `<div class="list">${AD.orders.map(orderRowHTML).join('')}</div>`
+    : `<div class="empty"><div class="big">🔍</div><h3>مفيش طلبات بالفلتر ده</h3></div>`}`;
+}
+
+function adminCustomersHTML() {
+  if (!AD.customers.length) return `<div class="empty"><div class="big">👥</div><h3>مفيش عملاء مسجلين لسه</h3></div>`;
+  return `
+  <div class="box" style="margin-bottom:12px"><input id="custSearch" placeholder="ابحث بالإيميل أو الاسم…" value="${h(AD.q)}"></div>
+  <div class="list">
+    ${AD.customers.filter((c) => !AD.q || (c.name + c.email + (c.phone || '')).toLowerCase().includes(AD.q.toLowerCase())).map((c) => `
+      <div class="row-line">
+        <div class="grow">
+          <strong>${h(c.name || 'بدون اسم')}</strong> <span class="role-chip role-${h(c.role)}">${h(c.email)}</span>
+          <div class="small muted" style="margin-top:3px">📱 ${h(c.phone || '—')} · 🧾 ${c.orders} طلب · ${money(c.total)}${c.lastOrder ? ` · آخر طلب ${h(timeAgo(c.lastOrder))}` : ''}</div>
+        </div>
+        <button class="btn btn-sm btn-ghost" data-act="admin-filter-cust" data-id="${h(c.id)}" data-q="${h(c.email)}">طلباته</button>
+      </div>`).join('')}
+  </div>`;
+}
+
+function adminMenuHTML() {
+  const e = AD.editing;
+  const lib = S.imageLibrary || [];
+  return `
+  <div class="box" style="margin-bottom:12px">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <strong>${MENU.length} صنف · ${missingImages().length} صنف بصور مكتبة (مش صورة مخصصة)</strong>
+      <div class="btn-row">
+        <button class="btn btn-sm btn-ghost" data-act="gen-missing">✨ ولّد صور للأصناف بدون صورة</button>
+        <button class="btn btn-sm btn-ghost" data-act="gen-all">🔁 ولّد صور لكل الأصناف المستوردة</button>
+        <button class="btn btn-sm btn-primary" data-act="menu-new">＋ صنف جديد</button>
+      </div>
+    </div>
+    <p class="small muted" style="margin:8px 0 0">الصور بتتولّد تلقائيًا حسب اسم الصنف وتصنيفه (مزوّد AI لو فيه مفتاح GEMINI_API_KEY أو OPENAI_API_KEY، وإلا من المكتبة المدمجة). تقدر تغيّر أي صورة يدويًا برفع صورة أو اختيار واحدة من المكتبة.</p>
+  </div>
+
+  ${e ? `
+  <div class="box" style="margin-bottom:12px;border-color:rgba(255,176,32,.4)">
+    <strong>${e.__new ? 'إضافة صنف جديد' : 'تعديل: ' + h(e.name)}</strong>
+    <form id="menuForm" style="margin-top:10px">
+      <input type="hidden" name="id" value="${h(e.id || '')}">
+      <div class="grid2">
+        <div><label class="lbl">الاسم *</label><input name="name" value="${h(e.name || '')}" required></div>
+        <div><label class="lbl">التصنيف</label><select name="cat">${CATS.map((c) => `<option value="${h(c.id)}" ${e.cat === c.id ? 'selected' : ''}>${h(c.name)}</option>`).join('')}</select></div>
+        <div><label class="lbl">السعر (فاضي = عرض بدون سعر)</label><input name="price" type="number" step="1" min="0" value="${e.price == null ? '' : e.price}"></div>
+        <div><label class="lbl">السعر القديم (اختياري)</label><input name="oldPrice" type="number" step="1" min="0" value="${e.oldPrice || ''}"></div>
+        <div><label class="lbl">وصف مختصر</label><input name="desc" value="${h(e.desc || '')}"></div>
+        <div><label class="lbl">نص مكان السعر (اختياري)</label><input name="priceLabel" value="${h(e.priceLabel || '')}" placeholder="إضافة"></div>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="featured" ${e.featured ? 'checked' : ''}> الأكثر طلبًا</span><span></span></label>
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="active" ${e.active !== false ? 'checked' : ''}> متاح في المنيو</span><span></span></label>
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="noPrice" ${e.noPrice ? 'checked' : ''}> عرض (زرار واتساب)</span><span></span></label>
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <div class="tbl-thumb" style="width:84px;height:72px">${e.image ? `<img src="${h(e.image)}" alt="" id="editThumb">` : ''}</div>
+        <div class="btn-row">
+          <label class="btn btn-sm btn-ghost" style="cursor:pointer">📤 ارفع صورة
+            <input type="file" id="imgUpload" accept="image/*" class="hidden"></label>
+          <button type="button" class="btn btn-sm btn-ghost" data-act="gen-one" data-id="${h(e.id || '')}">✨ ولّد بالذكاء الاصطناعي</button>
+        </div>
+      </div>
+      ${lib.length ? `<div style="margin-top:10px"><label class="lbl">أو اختر من مكتبة الصور</label>
+        <div class="img-picker">${lib.map((x) => `<button type="button" class="img-pick ${e.image === x.url ? 'on' : ''}" data-act="pick-img" data-url="${h(x.url)}" title="${h(x.label)}"><img src="${h(x.url)}" alt="${h(x.label)}" loading="lazy"></button>`).join('')}</div></div>` : ''}
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-primary btn-sm" type="submit">حفظ الصنف</button>
+        <button class="btn btn-ghost btn-sm" type="button" data-act="menu-cancel">إلغاء</button>
+      </div>
+    </form>
+  </div>` : ''}
+
+  <div class="list">
+    ${MENU.map((m) => `
+      <div class="row-line">
+        <div class="tbl-thumb">${m.image ? `<img src="${h(m.image)}" alt="">` : ''}</div>
+        <div class="grow">
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <strong>${h(m.name)}</strong>
+            ${m.featured ? `<span class="role-chip role-admin">★ الأكثر طلبًا</span>` : ''}
+            ${m.active === false ? `<span class="role-chip off-chip">موقوف</span>` : ''}
+            ${m.imageSource && m.imageSource !== 'upload' ? `<span class="role-chip">صورة: ${h({ ai: 'AI', pool: 'مكتبة', placeholder: 'بديلة' }[m.imageSource] || m.imageSource)}</span>` : ''}
+          </div>
+          <div class="small muted" style="margin-top:3px">${h(catName(m.cat))} · ${m.noPrice ? 'عرض خاص' : money(m.price)}${m.oldPrice ? ` (قبل ${money(m.oldPrice)})` : ''}</div>
+        </div>
+        <div class="btn-row" style="justify-content:flex-end">
+          <button class="btn btn-sm btn-ghost" data-act="menu-edit" data-id="${h(m.id)}">تعديل</button>
+          <button class="btn btn-sm btn-ghost" data-act="menu-toggle" data-id="${h(m.id)}">${m.active === false ? 'تفعيل' : 'إيقاف'}</button>
+          <button class="btn btn-sm btn-danger" data-act="menu-del" data-id="${h(m.id)}">حذف</button>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function adminUsersHTML() {
+  return `
+  <div class="box" style="margin-bottom:12px">
+    <strong>المستخدمون (${AD.users.length})</strong>
+    <p class="small muted" style="margin:6px 0 0">أي مستخدم جديد يسجل بيبقى Customer تلقائيًا. من هنا تقدر تغيّر أي حد لـ Supervisor أو Admin، وتفعّل/تعطّل المشرفين.</p>
+    <div class="row" style="margin-top:10px"><input id="userSearch" placeholder="ابحث بالإيميل أو الاسم…"></div>
+  </div>
+  <div class="list">
+    ${AD.users.filter((x) => !AD.q || (x.name + x.email).toLowerCase().includes(AD.q.toLowerCase())).map((x) => `
+      <div class="row-line" style="flex-wrap:wrap">
+        <div class="grow">
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <strong>${h(x.name || 'بدون اسم')}</strong>
+            <span class="role-chip role-${h(x.role)}">${x.role === 'admin' ? 'أدمن' : x.role === 'supervisor' ? 'مشرف' : 'عميل'}</span>
+            ${x.active === false ? `<span class="role-chip off-chip">معطّل</span>` : ''}
+            ${x.id === ME.id ? `<span class="role-chip">إنت</span>` : ''}
+          </div>
+          <div class="small muted" style="margin-top:3px">${h(x.email)} · 🧾 ${x.orders} طلب${x.phone ? ' · 📱 ' + h(x.phone) : ''}</div>
+        </div>
+        <div class="btn-row" style="justify-content:flex-end">
+          <select data-act="user-role" data-id="${h(x.id)}" style="width:auto;padding:8px 10px;font-size:12.5px" ${x.id === ME.id ? 'disabled' : ''}>
+            <option value="customer" ${x.role === 'customer' ? 'selected' : ''}>عميل</option>
+            <option value="supervisor" ${x.role === 'supervisor' ? 'selected' : ''}>مشرف</option>
+            <option value="admin" ${x.role === 'admin' ? 'selected' : ''}>أدمن</option>
+          </select>
+          <button class="btn btn-sm ${x.active === false ? 'btn-ok' : 'btn-danger'}" data-act="user-active" data-id="${h(x.id)}" data-v="${x.active === false ? '1' : '0'}" ${x.id === ME.id ? 'disabled' : ''}>
+            ${x.active === false ? 'تفعيل' : 'تعطيل'}</button>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function adminPaymentsHTML() {
+  const c = AD.payCfg || { provider: 'demo', currency: 'EGP', stripe: {}, paymob: {} };
+  const methods = AD.methods || (S.payments || []);
+  const proto = location.origin;
+  const list = AD.paidList || [];
+  return `
+  <form id="payCfgForm" class="box">
+    <strong>💳 إعدادات الدفع أونلاين</strong>
+    <p class="small muted" style="margin:6px 0 12px">اختار المزوّد وحط المفاتيح. مفيش أي مفتاح بيظهر للعميل — بيتخزن على السيرفر بس وبيتعرض مقنّع هنا.</p>
+    <div class="grid3">
+      <div><label class="lbl">المزوّد</label>
+        <select name="provider" id="payProvider">
+          <option value="demo" ${c.provider === 'demo' ? 'selected' : ''}>🧪 محاكاة (تجربة فورية — بدون حساب)</option>
+          <option value="stripe" ${c.provider === 'stripe' ? 'selected' : ''}>Stripe (بطاقات دولية)</option>
+          <option value="paymob" ${c.provider === 'paymob' ? 'selected' : ''}>Paymob (مصر: بطاقات + محافظ)</option>
+        </select></div>
+      <div><label class="lbl">العملة</label><input name="currency" value="${h(c.currency || 'EGP')}" maxlength="4"></div>
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-sm btn-ghost btn-block" type="button" data-act="pay-test">🔌 اختبار الاتصال</button></div>
+    </div>
+
+    <div id="payStripe" class="box" style="margin-top:12px;background:var(--surface-2)">
+      <strong>إعدادات Stripe</strong>
+      <div class="grid2" style="margin-top:10px">
+        <div><label class="lbl">Secret Key (sk_…)</label><input name="stripe_secretKey" value="${h(c.stripe?.secretKey || '')}" placeholder="sk_test_…"></div>
+        <div><label class="lbl">Webhook Secret (whsec_…)</label><input name="stripe_webhookSecret" value="${h(c.stripe?.webhookSecret || '')}" placeholder="whsec_…"></div>
+        <div><label class="lbl">Publishable Key (اختياري)</label><input name="stripe_publicKey" value="${h(c.stripe?.publicKey || '')}" placeholder="pk_…"></div>
+      </div>
+      <div class="small muted" style="margin-top:8px">حط رابط الـWebhook ده في لوحة Stripe (Developers → Webhooks) على حدث <b>checkout.session.completed</b>:<br>
+        <code class="code">${h(proto)}/api/webhooks/stripe</code>
+        <button class="btn btn-sm btn-ghost" type="button" data-act="copy-url" data-url="${h(proto)}/api/webhooks/stripe">نسخ</button></div>
+    </div>
+
+    <div id="payPaymob" class="box" style="margin-top:12px;background:var(--surface-2)">
+      <strong>إعدادات Paymob (Accept)</strong>
+      <div class="grid2" style="margin-top:10px">
+        <div><label class="lbl">API Key</label><input name="paymob_apiKey" value="${h(c.paymob?.apiKey || '')}" placeholder="من لوحة Paymob"></div>
+        <div><label class="lbl">Integration ID</label><input name="paymob_integrationId" value="${h(c.paymob?.integrationId || '')}" placeholder="مثال: 123456"></div>
+        <div><label class="lbl">Iframe ID</label><input name="paymob_iframeId" value="${h(c.paymob?.iframeId || '')}" placeholder="مثال: 98765"></div>
+        <div><label class="lbl">HMAC Secret</label><input name="paymob_hmacSecret" value="${h(c.paymob?.hmacSecret || '')}"></div>
+        <div><label class="lbl">Base URL</label><input name="paymob_baseUrl" value="${h(c.paymob?.baseUrl || 'https://accept.paymob.com')}"></div>
+      </div>
+      <div class="small muted" style="margin-top:8px">حط رابط الـCallback ده في لوحة Paymob (Transaction → Processed callback):<br>
+        <code class="code">${h(proto)}/api/webhooks/paymob</code>
+        <button class="btn btn-sm btn-ghost" type="button" data-act="copy-url" data-url="${h(proto)}/api/webhooks/paymob">نسخ</button></div>
+    </div>
+
+    <div style="margin-top:14px">
+      <strong>طرق الدفع اللي تظهر للعميل</strong>
+      ${methods.map((m, i) => `
+        <div class="row-line" style="margin-top:8px">
+          <input type="checkbox" name="m${i}_enabled" ${m.enabled !== false ? 'checked' : ''}>
+          <input name="m${i}_label" value="${h(m.label)}" style="flex:2">
+          <select name="m${i}_kind" style="width:auto">
+            <option value="cod" ${(m.kind || 'cod') === 'cod' ? 'selected' : ''}>عند الاستلام</option>
+            <option value="online" ${m.kind === 'online' ? 'selected' : ''}>أونلاين</option>
+          </select>
+          <input type="hidden" name="m${i}_id" value="${h(m.id)}">
+          <input type="hidden" name="m${i}_note" value="${h(m.note || '')}">
+        </div>`).join('')}
+    </div>
+
+    <div class="btn-row" style="margin-top:14px"><button class="btn btn-primary btn-sm" type="submit">حفظ إعدادات الدفع</button></div>
+  </form>
+
+  <div class="box" style="margin-top:12px">
+    <strong>آخر العمليات (${list.length})</strong>
+    ${!list.length ? `<p class="small muted">مفيش عمليات دفع لسه.</p>` : list.map((x) => `
+      <div class="line">
+        <span class="small">${h(x.orderId)} · ${h(x.provider)} · ${money(x.amount)}</span>
+        <span class="small">${x.status === 'paid' ? '✅ مدفوع' : x.status === 'refunded' ? '↩️ مرتجع' : x.status === 'failed' ? '⚠️ فشل' : '⏳ معلّق'}
+          <span class="muted"> · ${h(timeAgo(x.updatedAt || x.createdAt))}</span></span>
+      </div>`).join('')}
+  </div>`;
+}
+
+function adminWhatsappHTML() {
+  const c = AD.waCfg || { provider: 'console', notifyOn: {}, staffNumbers: [] };
+  const tpl = AD.waTemplates || {};
+  const log = AD.waLog || [];
+  const statuses = S.statuses || [];
+  const providers = [
+    ['console', '🖨️ Console (تجربة — الرسالة في الـconsole)'],
+    ['link', '🔗 رابط wa.me (من غير API — بضغطة يد)'],
+    ['meta', 'WhatsApp Cloud API (Meta)'],
+    ['twilio', 'Twilio'],
+    ['greenapi', 'Green API'],
+    ['ultramsg', 'UltraMsg'],
+    ['callmebot', 'CallMeBot'],
+  ];
+  const tplFields = [
+    ['new', 'تأكيد استلام الطلب'], ['received', 'تم استلام الطلب'], ['preparing', 'جاري التجهيز'],
+    ['on_way', 'خرج للتوصيل'], ['delivered', 'تم التوصيل'], ['cancelled', 'إلغاء الطلب'],
+    ['paid', 'تأكيد الدفع'], ['payment_link', 'رابط الدفع'], ['staff_new', 'إشعار المطعم بطلب جديد'],
+  ];
+  return `
+  <form id="waCfgForm">
+    <div class="box">
+      <div class="row" style="justify-content:space-between">
+        <strong>💬 إشعارات واتساب</strong>
+        <label class="row" style="gap:8px;cursor:pointer"><span class="small muted">مفعّلة</span>
+          <input type="checkbox" name="enabled" ${c.enabled ? 'checked' : ''}></label>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div><label class="lbl">المزوّد</label>
+          <select name="provider" id="waProvider">${providers.map(([v, l]) => `<option value="${v}" ${c.provider === v ? 'selected' : ''}>${h(l)}</option>`).join('')}</select></div>
+        <div><label class="lbl">كود الدولة الافتراضي</label><input name="defaultCountryCode" value="${h(c.defaultCountryCode || '20')}" maxlength="4"></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn btn-sm btn-ghost btn-block" type="button" data-act="wa-test">📤 ابعت رسالة تجربة</button></div>
+      </div>
+      <label class="opt" style="margin-top:12px"><span>أرسل تحديثات الحالة للعميل (لو موافق)</span>
+        <input type="checkbox" name="requireOptIn" ${c.requireOptIn !== false ? 'checked' : ''}></label>
+      <label class="opt"><span>ابعتلي كمان للرقم ده عند وصول طلب جديد</span>
+        <input type="checkbox" name="staffEnabled" ${c.staffEnabled ? 'checked' : ''}></label>
+      <div style="margin-top:8px"><label class="lbl">أرقام المطعم (بفاصلة)</label>
+        <input name="staffNumbers" value="${h((c.staffNumbers || []).join(', '))}" placeholder="201000000000, 201111111111"></div>
+
+      <div style="margin-top:12px"><label class="lbl">على أي حالات نبعت للعميل</label>
+        <div class="row" style="flex-wrap:wrap;gap:8px">
+          ${statuses.map((st) => `<label class="chip" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" name="on_${h(st.id)}" ${(!c.notifyOn || c.notifyOn[st.id] !== false) ? 'checked' : ''}> ${st.emoji} ${h(st.label)}</label>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="box" style="margin-top:12px">
+      <strong>مفاتيح المزوّد</strong>
+      <p class="small muted" style="margin:6px 0 10px">المفاتيح بتتخزن على السيرفر وبس، ومش بتظهر لأي عميل. اللي بيظهر هنا مقنّع (آخر ٤ حروف).</p>
+
+      <div class="wa-grp" data-grp="meta" style="display:none">
+        <div class="grid2">
+          <div><label class="lbl">Access Token</label><input name="meta_token" value="${h(c.meta?.token || '')}"></div>
+          <div><label class="lbl">Phone Number ID</label><input name="meta_phoneId" value="${h(c.meta?.phoneId || '')}"></div>
+          <div><label class="lbl">Template Name (اختياري — للرسائل خارج نافذة 24 ساعة)</label><input name="meta_templateName" value="${h(c.meta?.templateName || '')}"></div>
+          <div><label class="lbl">Template Language</label><input name="meta_templateLang" value="${h(c.meta?.templateLang || 'ar')}"></div>
+        </div>
+      </div>
+
+      <div class="wa-grp" data-grp="twilio" style="display:none">
+        <div class="grid3">
+          <div><label class="lbl">Account SID</label><input name="twilio_accountSid" value="${h(c.twilio?.accountSid || '')}"></div>
+          <div><label class="lbl">Auth Token</label><input name="twilio_authToken" value="${h(c.twilio?.authToken || '')}"></div>
+          <div><label class="lbl">من رقم</label><input name="twilio_from" value="${h(c.twilio?.from || 'whatsapp:+14155238886')}"></div>
+        </div>
+      </div>
+
+      <div class="wa-grp" data-grp="greenapi" style="display:none">
+        <div class="grid3">
+          <div><label class="lbl">Base URL</label><input name="greenapi_baseUrl" value="${h(c.greenapi?.baseUrl || 'https://7103.api.greenapi.com')}"></div>
+          <div><label class="lbl">Instance ID</label><input name="greenapi_instanceId" value="${h(c.greenapi?.instanceId || '')}"></div>
+          <div><label class="lbl">API Token</label><input name="greenapi_token" value="${h(c.greenapi?.token || '')}"></div>
+        </div>
+      </div>
+
+      <div class="wa-grp" data-grp="ultramsg" style="display:none">
+        <div class="grid2">
+          <div><label class="lbl">Instance ID</label><input name="ultramsg_instanceId" value="${h(c.ultramsg?.instanceId || '')}"></div>
+          <div><label class="lbl">Token</label><input name="ultramsg_token" value="${h(c.ultramsg?.token || '')}"></div>
+        </div>
+      </div>
+
+      <div class="wa-grp" data-grp="callmebot" style="display:none">
+        <div><label class="lbl">API Key</label><input name="callmebot_apiKey" value="${h(c.callmebot?.apiKey || '')}"></div>
+      </div>
+
+      <div class="wa-grp" data-grp="console" style="display:none">
+        <p class="small muted">المزوّد ده للتجربة: الرسالة بتتطبع في نافذة السيرفر بدل ما تتبعت. مناسبة تتأكد إن كل حاجة ماشية قبل ما توصل لمزوّد حقيقي.</p>
+      </div>
+      <div class="wa-grp" data-grp="link" style="display:none">
+        <p class="small muted">من غير أي API: التطبيق بيجهّزلك نص الرسالة وبيتفتح واتساب بضغطة على رقم العميل (من صفحة الطلب). وكل رسالة بتتسجل في السجل تحت.</p>
+      </div>
+    </div>
+
+    <div class="box" style="margin-top:12px">
+      <strong>نصوص الرسائل</strong>
+      <p class="small muted" style="margin:6px 0 10px">المتغيرات المتاحة: <code class="code">{name}</code> <code class="code">{order}</code> <code class="code">{total}</code> <code class="code">{phone}</code> <code class="code">{eta}</code> <code class="code">{address}</code> <code class="code">{link}</code> <code class="code">{paylink}</code></p>
+      ${tplFields.map(([k, label]) => `
+        <div style="margin-bottom:8px"><label class="lbl">${h(label)}</label>
+        <textarea name="tpl_${k}" rows="2">${h(tpl[k] || '')}</textarea></div>`).join('')}
+    </div>
+
+    <div class="btn-row" style="margin-top:12px"><button class="btn btn-primary btn-sm" type="submit">حفظ إعدادات الواتساب</button></div>
+  </form>
+
+  <div class="box" style="margin-top:12px">
+    <strong>سجل الرسائل (${log.length})</strong>
+    ${!log.length ? `<p class="small muted">مفيش رسائل لسه.</p>` : log.map((x) => `
+      <div class="line" style="align-items:flex-start">
+        <span class="small" style="flex:1">
+          <b>${h(x.orderId || '—')}</b> · ${h(x.type)} → ${h(x.to)}
+          <div class="muted" style="white-space:pre-wrap;max-height:64px;overflow:hidden">${h(String(x.message).slice(0, 140))}</div>
+          <div class="muted">${h(timeAgo(x.at))} · ${x.result === 'sent' ? '✅ اتبعتت' : x.result === 'console' ? '🖨️ console' : x.result === 'link' ? '🔗 رابط جاهز' : x.result === 'skipped' ? '⏭️ اتجاهلت' : '⚠️ فشلت'}${x.error ? ' — ' + h(x.error) : ''}</div>
+        </span>
+        <span class="row" style="gap:6px">
+          ${x.link ? `<a class="btn btn-sm btn-ghost" target="_blank" rel="noopener" href="${h(x.link)}">💬 افتح</a>` : ''}
+          <button class="btn btn-sm btn-ghost" data-act="wa-resend" data-phone="${h(x.to)}" data-text="${h(x.message)}">🔁 أعد</button>
+        </span>
+      </div>`).join('')}
+  </div>`;
+}
+
+function adminSettingsHTML() {
+  return `
+  <form id="settingsForm" class="box">
+    <strong>إعدادات المطعم</strong>
+    <div class="grid2" style="margin-top:10px">
+      <div><label class="lbl">اسم المطعم</label><input name="name" value="${h(S.name || '')}"></div>
+      <div><label class="lbl">الوصف المختصر</label><input name="tagline" value="${h(S.tagline || '')}"></div>
+      <div><label class="lbl">التليفون</label><input name="phone" value="${h(S.phone || '')}"></div>
+      <div><label class="lbl">واتساب (بكود الدولة)</label><input name="whatsapp" value="${h(S.whatsapp || '')}"></div>
+      <div><label class="lbl">العنوان</label><input name="address" value="${h(S.address || '')}"></div>
+      <div><label class="lbl">مواعيد العمل (نص)</label><input name="hoursText" value="${h(S.hoursText || '')}"></div>
+      <div><label class="lbl">يفتح الساعة</label><input name="openHour" type="number" min="0" max="23" value="${h(S.openHour ?? 12)}"></div>
+      <div><label class="lbl">يقفل الساعة (26 = ٢ بعد منتصف الليل)</label><input name="closeHour" type="number" min="1" max="30" value="${h(S.closeHour ?? 26)}"></div>
+      <div><label class="lbl">رسوم التوصيل</label><input name="deliveryFee" type="number" min="0" value="${h(S.deliveryFee ?? 20)}"></div>
+      <div><label class="lbl">توصيل مجاني فوق (0 = مقفول)</label><input name="freeDeliveryOver" type="number" min="0" value="${h(S.freeDeliveryOver ?? 0)}"></div>
+      <div><label class="lbl">أقل مبلغ للطلب</label><input name="minOrder" type="number" min="0" value="${h(S.minOrder ?? 0)}"></div>
+      <div><label class="lbl">مدة التوصيل (نص)</label><input name="deliveryEta" value="${h(S.deliveryEta || '')}"></div>
+    </div>
+    <label class="opt" style="margin-top:12px"><span><input type="checkbox" name="aiAutoImages" ${S.aiAutoImages ? 'checked' : ''}> توليد صور تلقائيًا لأي صنف جديد بدون صورة</span><span></span></label>
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn btn-primary btn-sm" type="submit">حفظ الإعدادات</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-act="backup">⬇️ نسخة احتياطية (JSON)</button>
+    </div>
+  </form>
+  <div class="box" style="margin-top:12px">
+    <strong>حسابات الدخول</strong>
+    <p class="small muted" style="margin:6px 0 0">admin@bbq.app · supervisor@bbq.app · demo@bbq.app — غيّر كلمات السر من صفحة المستخدمين أو أنشئ حسابات جديدة من التطبيق.</p>
+  </div>`;
+}
+
+/* ============================== ١٤) نافذة تفاصيل الطلب (للإدارة) ============================== */
+function openOrderDrawer(id) {
+  const o = AD.orders.find((x) => x.id === id) || MY.orders.find((x) => x.id === id);
+  if (!o) return;
+  let bd = $('#drawer');
+  if (!bd) { bd = document.createElement('div'); bd.id = 'drawer'; bd.className = 'drawer-backdrop'; document.body.appendChild(bd); }
+  const flow = FLOW();
+  bd.innerHTML = `
+  <div class="drawer">
+    <div class="dhead">
+      <strong style="flex:1">طلب ${h(o.id)}</strong>
+      <button class="icon-btn" data-act="drawer-close">✕</button>
+    </div>
+    <div class="dbody">
+      <div class="row" style="justify-content:space-between">${statusChip(o.status)}<span class="small muted">${h(fmtDT(o.createdAt))}</span></div>
+      <div class="box" style="margin-top:12px">
+        <strong>بيانات العميل</strong>
+        <div class="line"><span class="muted">الاسم</span><span>${h(o.customer.name)}</span></div>
+        <div class="line"><span class="muted">الهاتف</span><span><a href="tel:${h(o.customer.phone)}" style="color:var(--ember-2)">${h(o.customer.phone)}</a>
+          <a class="btn btn-sm btn-ghost" style="margin-inline-start:6px" target="_blank" rel="noopener" href="https://wa.me/${h(String(o.customer.phone || '').replace(/\D/g, '').replace(/^0/, '20'))}">💬</a></span></div>
+        <div class="line"><span class="muted">الإيميل</span><span class="small">${h(o.customer.email || '—')}</span></div>
+        <div class="line"><span class="muted">العنوان</span><span class="small">${h(o.customer.area ? o.customer.area + ' — ' : '')}${h(o.customer.address)}</span></div>
+        <div class="line"><span class="muted">وقت التوصيل</span><span>${h(o.customer.time || '—')}</span></div>
+        <div class="line"><span class="muted">الملاحظات</span><span class="small">${h(o.customer.notes || '—')}</span></div>
+        <div class="line"><span class="muted">طريقة الدفع</span><span>${h(((S.payments || []).find((p) => p.id === o.payment) || {}).label || o.payment)}</span></div>
+      </div>
+      <div class="box" style="margin-top:12px">
+        <strong>المنتجات (Order Items)</strong>
+        ${o.items.map((i) => `<div class="line"><span>${h(i.name)} ×${i.qty}
+          ${i.addons && i.addons.length ? `<div class="small muted">${h(i.addons.map((a) => a.name).join('، '))}</div>` : ''}
+          ${i.note ? `<div class="small muted">📝 ${h(i.note)}</div>` : ''}</span>
+          <span>${money(i.line_total || i.price * i.qty)}</span></div>`).join('')}
+        <div class="line"><span>المجموع</span><span>${money(o.subtotal)}</span></div>
+        <div class="line"><span>التوصيل</span><span>${o.delivery ? money(o.delivery) : 'مجاني'}</span></div>
+        ${o.discount ? `<div class="line" style="color:var(--green)"><span>خصم</span><span>− ${money(o.discount)}</span></div>` : ''}
+        <div class="line total"><span>الإجمالي</span><span class="price">${money(o.total)}</span></div>
+      </div>
+      <div class="box" style="margin-top:12px">
+        <div class="row" style="justify-content:space-between"><strong>💳 الدفع</strong>${payChip(o)}</div>
+        <div class="line"><span class="muted">الطريقة</span><span>${h(((S.payments || []).find((p) => p.id === o.payment) || {}).label || o.payment)}</span></div>
+        ${o.paymentProvider ? `<div class="line"><span class="muted">المزوّد</span><span class="small">${h(o.paymentProvider)}${o.paymentRef ? ` · ${h(String(o.paymentRef).slice(0, 18))}` : ''}</span></div>` : ''}
+        ${o.paidAt ? `<div class="line"><span class="muted">اتدفع في</span><span class="small">${h(fmtDT(o.paidAt))}</span></div>` : ''}
+        <div class="btn-row" style="margin-top:10px">
+          ${o.payment_status !== 'paid' ? `<button class="btn btn-sm btn-ok" data-act="pay-mark" data-id="${h(o.id)}" data-v="paid">✅ علّم كمدفوع</button>` : ''}
+          ${o.payment_status === 'paid' ? `<button class="btn btn-sm btn-ghost" data-act="pay-mark" data-id="${h(o.id)}" data-v="refunded">↩️ تسجيل مرتجع</button>` : ''}
+          ${['paid', 'refunded'].includes(o.payment_status) ? `<button class="btn btn-sm btn-ghost" data-act="pay-mark" data-id="${h(o.id)}" data-v="unpaid">رجّعه "غير مدفوع"</button>` : ''}
+          ${(isOnline(o) || (S.onlinePayment && S.onlinePayment.enabled)) ? `<button class="btn btn-sm btn-ghost" data-act="wa-paylink" data-id="${h(o.id)}">💳 ابعت رابط الدفع</button>` : ''}
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:12px">
+        <strong>💬 واتساب العميل</strong>
+        <div class="small muted" style="margin-top:4px">${h(o.customer.phone)}${o.customer.notifyWhatsapp === false ? ' · العميل موقف التحديثات' : ''}</div>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-sm btn-ghost" data-act="wa-send" data-id="${h(o.id)}">ابعت تحديث الحالة الحالية</button>
+          <a class="btn btn-sm btn-ghost" target="_blank" rel="noopener"
+             href="https://wa.me/${h(String(o.customer.phone || '').replace(/\D/g, '').replace(/^0/, '20'))}">💬 افتح المحادثة</a>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:12px">
+        <strong>تغيير الحالة</strong>
+        <div class="btn-row" style="margin-top:10px">
+          ${(S.statuses || []).map((s) => `<button class="btn btn-sm ${o.status === s.id ? 'btn-primary' : 'btn-ghost'}" data-act="set-status" data-id="${h(o.id)}" data-v="${h(s.id)}">${s.emoji} ${h(s.label)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="box" style="margin-top:12px">
+        <strong>سجل الحالة</strong>
+        ${(o.history || []).slice().reverse().map((x) => `<div class="line"><span class="small">${h((S.statuses.find((s) => s.id === x.status) || {}).label || x.status)}</span><span class="small muted">${h(fmtDT(x.at))}</span></div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+  bd.classList.add('show');
+  bd.onclick = (e) => { if (e.target === bd || e.target.closest('[data-act="drawer-close"]')) closeDrawer(); };
+  document.body.style.overflow = 'hidden';
+}
+function closeDrawer() { const bd = $('#drawer'); if (bd) bd.classList.remove('show'); document.body.style.overflow = ''; }
+
+/* ============================== ١٥) الإشعارات ============================== */
+function renderNotifPanel() {
+  let panel = $('#notifPanel');
+  if (!panel) { panel = document.createElement('div'); panel.id = 'notifPanel'; panel.className = 'notif-panel hidden'; document.body.appendChild(panel); }
+  const unread = NOTIFS.filter((n) => !n.read).length;
+  panel.innerHTML = `
+    <div class="head"><strong style="flex:1">الإشعارات${unread ? ` (${unread})` : ''}</strong>
+      <button class="btn btn-sm btn-ghost" data-act="notif-read-all">تعليم الكل كمقروء</button>
+      <button class="icon-btn" data-act="notif-close">✕</button></div>
+    ${!NOTIFS.length ? `<div class="empty" style="padding:24px"><div class="big">🔔</div><p>مفيش إشعارات لسه</p></div>`
+      : NOTIFS.map((n) => `
+        <button class="notif ${n.read ? '' : 'unread'}" data-act="notif-open" data-id="${h(n.id)}" data-order="${h(n.orderId || '')}">
+          <div class="t">${h(n.title)}</div>
+          <div class="b">${h(n.body)}</div>
+          <div class="at">${h(timeAgo(n.createdAt))}</div>
+        </button>`).join('')}
+    <div style="padding:10px 14px" class="small muted">الإشعارات بتوصل للمشرفين والأدمن بس عند أي طلب جديد.</div>`;
+}
+async function loadNotifs() {
+  if (!isStaff()) return;
+  try {
+    const d = await api.req('/api/notifications');
+    NOTIFS = d.notifications;
+    const btn = $('#notifBtn');
+    if (btn) { const unread = NOTIFS.filter((n) => !n.read).length; btn.innerHTML = `🔔${unread ? `<span class="badge-n red">${unread}</span>` : ''}`; }
+    if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
+  } catch { /* ignore */ }
+}
+function toggleNotifPanel() {
+  let panel = $('#notifPanel');
+  if (!panel) renderNotifPanel();
+  panel = $('#notifPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) loadNotifs();
+}
+
+/* ============================== ١٦) البث المباشر (SSE) ============================== */
+let es = null;
+function connectSSE() {
+  if (es) { es.close(); es = null; }
+  if (!ME || !api.token) return;
+  try {
+    es = new EventSource(`/api/events?token=${encodeURIComponent(api.token)}`);
+    es.onmessage = async (ev) => {
+      let d = {}; try { d = JSON.parse(ev.data); } catch { return; }
+      if (d.kind === 'hello') return;
+      if (d.kind === 'notification' && isStaff()) {
+        const fresh = (d.items || []).filter((n) => String(n.userId) === String(ME.id));
+        if (fresh.length) {
+          NOTIFS = [...fresh, ...NOTIFS];
+          const n0 = fresh[0];
+          toast(`🔔 ${n0.title} — ${n0.body}`, 5000);
+          const btn = $('#notifBtn'); if (btn) btn.innerHTML = `🔔<span class="badge-n red">${NOTIFS.filter((x) => !x.read).length}</span>`;
+          if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
+          /* تحديث فوري للوحة */
+          if (parseHash().name === 'admin') { await loadAdminStats(); await loadAdminOrders(); softRefreshAdmin(); }
+        }
+      }
+      if (d.kind === 'order:mine') {
+        MY.loaded = false;
+        await loadMyOrders(true);
+        const r = parseHash();
+        if (r.name === 'orders') softRender();
+        if (r.name === 'order' && r.param === d.orderId) softRender();
+        if (MY.orders.some((o) => o.id === d.orderId) && ['orders', 'order'].includes(r.name)) toast('تم تحديث حالة طلبك ✅');
+      }
+    };
+    es.onerror = () => {
+      sseFailures += 1;
+      if (sseFailures >= 3) { es.close(); es = null; startPolling(20000); }   // بدّل للتحديث الدوري
+    };
+    es.onopen = () => { sseFailures = 0; };
+  } catch { /* مش مدعوم */ }
+}
+
+/* ============================== ١٦.٥) التحديث الدوري (بديل SSE على Vercel) ============================== */
+let pollTimer = null;
+let sseFailures = 0;
+
+/**
+ * على الاستضافة السيرفرلس (Vercel) مفيش SSE — فبنستخدم تحديث دوري كل ٢٠ ثانية.
+ * نفس النتيجة: العميل يشوف تغيّر حالة طلبه والإدارة تشوف الطلبات الجديدة.
+ */
+function startPolling(ms = 20000) {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const r = parseHash();
+      if (isStaff()) await loadNotifs();
+      if (['orders', 'order'].includes(r.name) && ME) {
+        const before = MY.orders.map((o) => o.id + ':' + o.status).join('|');
+        await loadMyOrders(true);
+        const after = MY.orders.map((o) => o.id + ':' + o.status).join('|');
+        if (before !== after && before) { toast('تم تحديث حالة طلبك ✅'); softRender(); }
+      }
+      if (r.name === 'admin' && isStaff()) { await loadAdminStats(); await loadAdminOrders(); softRefreshAdmin(); }
+    } catch { /* نتجاهل ونحاول تاني */ }
+  }, ms);
+}
+
+/* ============================== ١٧) الرسم والأحداث ============================== */
+function softRender() { render({ soft: true }); }
+function softRefreshAdmin() { const b = $('#adminBody'); if (b && parseHash().name === 'admin') b.innerHTML = adminBodyFor(AD.tab); }
+function adminBodyFor(tab) {
+  if (tab === 'dash') return adminDashHTML();
+  if (tab === 'orders') return adminOrdersHTML();
+  if (tab === 'customers') return adminCustomersHTML();
+  if (tab === 'menu') return isAdmin() ? adminMenuHTML() : deniedHTML();
+  if (tab === 'users') return isAdmin() ? adminUsersHTML() : deniedHTML();
+  if (tab === 'payments') return isAdmin() ? adminPaymentsHTML() : deniedHTML();
+  if (tab === 'whatsapp') return isAdmin() ? adminWhatsappHTML() : deniedHTML();
+  if (tab === 'settings') return isAdmin() ? adminSettingsHTML() : deniedHTML();
+  return '';
+}
+
+async function render(opts = {}) {
+  const r = parseHash();
+  const view = $('#view');
+
+  /* تحميل البيانات المطلوبة للصفحة */
+  if (r.name === 'orders' || r.name === 'order' || r.name === 'account') await loadMyOrders();
+
+  /* رجعنا من صفحة الدفع؟ نتأكد من المزوّد نفسه (مش بنعتمد على الرابط لوحده) */
+  if (r.name === 'order' && r.q.get('pay') && ME) {
+    try {
+      const d = await api.req('/api/orders/' + encodeURIComponent(r.param) + '/verify', { method: 'POST' });
+      if (r.q.get('pay') === 'success') toast(d.status === 'paid' ? 'تم تأكيد الدفع ✅' : 'الدفع لسه بيتأكد… (' + d.status + ')', 4500);
+      else toast('تم إلغاء الدفع — الطلب محفوظ وتقدر تدفع في أي وقت', 4500);
+      await loadMyOrders(true);
+      history.replaceState(null, '', '#/order/' + r.param);
+    } catch { /* مش مشكلة — الحالة هتتحدّث من الـwebhook */ }
+  }
+  if (r.name === 'admin' && isStaff()) {
+    if (!AD.stats) await loadAdminStats();
+    if (r.q.get('tab') && r.q.get('tab') !== AD.tab) AD.tab = r.q.get('tab');
+    if (['dash', 'orders'].includes(AD.tab) && (!AD.orders.length || opts.force)) await loadAdminOrders();
+    if (AD.tab === 'customers' && !AD.customers.length) AD.customers = (await api.req('/api/admin/customers')).customers;
+    if (AD.tab === 'users' && isAdmin() && !AD.users.length) AD.users = (await api.req('/api/admin/users')).users;
+    if (AD.tab === 'payments' && isAdmin() && !AD.payCfg) { const d = await api.req('/api/admin/payments'); AD.payCfg = d.config; AD.methods = d.methods || []; AD.paidList = d.paid || []; }
+    if (AD.tab === 'whatsapp' && isAdmin() && !AD.waCfg) { const d = await api.req('/api/admin/whatsapp'); AD.waCfg = d.config; AD.waTemplates = d.templates; AD.waLog = d.log || []; }
+  }
+
+  let html = '';
+  if (r.name === 'home') html = viewsHome();
+  else if (r.name === 'menu') html = viewsMenu(r.q);
+  else if (r.name === 'cart') html = viewsCart();
+  else if (r.name === 'checkout') html = viewsCheckout();
+  else if (r.name === 'orders') html = viewsOrders();
+  else if (r.name === 'order') html = viewOrderPage(r.param);
+  else if (r.name === 'account') html = viewsAccount();
+  else if (r.name === 'login') html = authPageHTML('login', r.q);
+  else if (r.name === 'signup') html = authPageHTML('signup', r.q);
+  else if (r.name === 'forgot') html = `
+    ${headerHTML('account')}<main class="app"><div class="wrap" style="max-width:460px">
+      <div class="page-head"><h1>نسيت كلمة السر؟</h1><p>هنبعتلك رابط لإعادة التعيين</p></div>
+      <form id="forgotForm" class="box" style="margin-top:14px">
+        <label class="lbl">الإيميل</label><input name="email" type="email" required placeholder="you@example.com">
+        <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">ابعت الرابط</button>
+        <div class="center small muted" style="margin-top:10px"><a href="#/login" style="color:var(--ember-2)">رجوع لتسجيل الدخول</a></div>
+      </form></div>${footerHTML()}</main>`;
+  else if (r.name === 'reset') html = authPageHTML('reset', r.q);
+  else if (r.name === 'admin') html = viewsAdmin(r.q);
+  else html = `<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
+    <div class="big">🧭</div><h3>الصفحة غير موجودة</h3><a class="btn btn-primary" style="margin-top:14px" href="#/">الرئيسية</a></div></div></main>`;
+
+  view.innerHTML = html + navHTML(r.name === 'order' ? 'orders' : r.name);
+  if (!opts.soft || opts.scroll) window.scrollTo({ top: 0 });
+  renderCartBar(); updateBadges(); bindPage(r);
+}
+
+/* ============================== ١٨) ربط عناصر الصفحة ============================== */
+function bindPage(r) {
+  const si = $('#searchInput');
+  if (si) {
+    let t;
+    si.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('q', si.value); go('menu?' + q); }, 350);
+    });
+  }
+  const ss = $('#sortSel');
+  if (ss) ss.addEventListener('change', () => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('sort', ss.value); go('menu?' + q); });
+
+  $$('input[data-note]').forEach((inp) => inp.addEventListener('change', () => {
+    const c = cart.find((x) => x.key === inp.getAttribute('data-note'));
+    if (c) { c.note = inp.value; saveCart(); }
+  }));
+
+  const cf = $('#checkoutForm');
+  if (cf) {
+    $$('.opt[data-pay]', cf).forEach((l) => l.addEventListener('click', () => {
+      $$('.opt[data-pay]', cf).forEach((x) => x.classList.remove('on')); l.classList.add('on');
+    }));
+    cf.addEventListener('submit', submitOrder);
+  }
+
+  const pf = $('#profileForm');
+  if (pf) pf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(pf);
+    try {
+      const d = await api.req('/api/me', { method: 'PATCH', body: {
+        name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'), address: fd.get('address'),
+        notifyWhatsapp: fd.get('notifyWhatsapp') != null,
+      } });
+      ME = d.user; toast('تم حفظ البيانات ✅');
+    } catch (err) { toast(err.message); }
+  });
+
+  const lf = $('#loginForm');
+  if (lf) lf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(lf);
+    try {
+      const d = await api.req('/api/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
+      api.setToken(d.token); ME = d.user; MY.loaded = false;
+      toast(`أهلًا ${ME.name || ME.email} 👋`);
+      if (S.realtime === false) startPolling(20000); else connectSSE();
+      await loadNotifs();
+      go(fd.get('return') || 'account');
+    } catch (err) { toast(err.message, 3500); }
+  });
+
+  const sf = $('#signupForm');
+  if (sf) sf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(sf);
+    try {
+      const d = await api.req('/api/auth/signup', { method: 'POST', body: { name: fd.get('name'), email: fd.get('email'), password: fd.get('password'), phone: fd.get('phone') } });
+      api.setToken(d.token); ME = d.user; MY.loaded = false;
+      toast('تم إنشاء حسابك 🎉');
+      if (S.realtime === false) startPolling(20000); else connectSSE();
+      await loadNotifs();
+      go(fd.get('return') || 'account');
+    } catch (err) { toast(err.message, 3500); }
+  });
+
+  const ff = $('#forgotForm');
+  if (ff) ff.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(ff);
+    try {
+      const d = await api.req('/api/auth/forgot', { method: 'POST', body: { email: fd.get('email') } });
+      toast(d.message, 5000);
+      toast('(رسالة الاستعادة بتظهر في الـconsole بتاع السيرفر لو مفيش إيميل مضبوط)', 5000);
+      go('login');
+    } catch (err) { toast(err.message); }
+  });
+
+  const rf = $('#resetForm');
+  if (rf) rf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(rf);
+    try {
+      const d = await api.req('/api/auth/reset', { method: 'POST', body: { token: fd.get('token'), password: fd.get('password') } });
+      toast(d.message, 4000); go('login');
+    } catch (err) { toast(err.message, 3500); }
+  });
+
+  /* ---- الإدارة ---- */
+  const as = $('#adminSearch');
+  if (as) {
+    let t;
+    as.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(async () => { AD.q = as.value; await loadAdminOrders(); softRefreshAdmin(); }, 350);
+    });
+  }
+  const cs = $('#custSearch');
+  if (cs) cs.addEventListener('input', () => { AD.q = cs.value; softRefreshAdmin(); });
+  const us = $('#userSearch');
+  if (us) us.addEventListener('input', () => { AD.q = us.value; softRefreshAdmin(); });
+
+  const mf = $('#menuForm');
+  if (mf) {
+    mf.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(mf);
+      const body = {
+        name: fd.get('name'), cat: fd.get('cat'), desc: fd.get('desc'),
+        price: fd.get('price') === '' ? null : Number(fd.get('price')),
+        oldPrice: fd.get('oldPrice') === '' ? null : Number(fd.get('oldPrice')),
+        priceLabel: fd.get('priceLabel'),
+        featured: fd.get('featured') != null, active: fd.get('active') != null, noPrice: fd.get('noPrice') != null,
+      };
+      try {
+        const id = fd.get('id');
+        if (id) await api.req('/api/admin/menu/' + encodeURIComponent(id), { method: 'PATCH', body });
+        else await api.req('/api/admin/menu', { method: 'POST', body });
+        toast('تم الحفظ ✅');
+        AD.editing = null;
+        MENU = (await api.req('/api/bootstrap')).menu;
+        softRefreshAdmin();
+      } catch (err) { toast(err.message, 3500); }
+    });
+    const up = $('#imgUpload');
+    if (up) up.addEventListener('change', async () => {
+      const f = up.files && up.files[0];
+      if (!f) return;
+      const id = AD.editing && AD.editing.id;
+      if (!id) { toast('احفظ الصنف الأول وبعدين ارفعله صورة'); return; }
+      const fd = new FormData(); fd.append('image', f);
+      try {
+        const d = await api.req('/api/admin/menu/' + encodeURIComponent(id) + '/image', { method: 'POST', raw: fd });
+        AD.editing.image = d.item.image;
+        MENU = (await api.req('/api/bootstrap')).menu;
+        toast('تم رفع الصورة ✅'); softRefreshAdmin();
+      } catch (err) { toast(err.message, 3500); }
+    });
+  }
+
+  const pcf = $('#payCfgForm');
+  if (pcf) {
+    const show = () => {
+      const v = $('#payProvider').value;
+      $$('.wa-grp, #payStripe, #payPaymob').forEach(() => {});
+      const st = $('#payStripe'), pm = $('#payPaymob');
+      if (st) st.style.display = v === 'stripe' ? '' : 'none';
+      if (pm) pm.style.display = v === 'paymob' ? '' : 'none';
+    };
+    $('#payProvider')?.addEventListener('change', show);
+    show();
+    pcf.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(pcf);
+      const methods = [];
+      for (let i = 0; fd.get(`m${i}_id`) != null; i++) {
+        methods.push({
+          id: fd.get(`m${i}_id`), label: fd.get(`m${i}_label`), kind: fd.get(`m${i}_kind`),
+          note: fd.get(`m${i}_note`), enabled: fd.get(`m${i}_enabled`) != null,
+        });
+      }
+      const body = {
+        provider: fd.get('provider'), currency: fd.get('currency'), methods,
+        stripe: { secretKey: fd.get('stripe_secretKey'), webhookSecret: fd.get('stripe_webhookSecret'), publicKey: fd.get('stripe_publicKey') },
+        paymob: {
+          apiKey: fd.get('paymob_apiKey'), integrationId: fd.get('paymob_integrationId'), iframeId: fd.get('paymob_iframeId'),
+          hmacSecret: fd.get('paymob_hmacSecret'), baseUrl: fd.get('paymob_baseUrl'),
+        },
+      };
+      try {
+        await api.req('/api/admin/payments', { method: 'PATCH', body });
+        const d = await api.req('/api/admin/payments');
+        AD.payCfg = d.config; AD.methods = d.methods || []; AD.paidList = d.paid || [];
+        S = (await api.req('/api/bootstrap')).settings;
+        toast('تم حفظ إعدادات الدفع ✅');
+        softRefreshAdmin();
+      } catch (err) { toast(err.message, 4000); }
+    });
+  }
+
+  const waf = $('#waCfgForm');
+  if (waf) {
+    const show = () => {
+      const v = $('#waProvider').value;
+      $$('.wa-grp', waf).forEach((g) => { g.style.display = g.getAttribute('data-grp') === v ? '' : 'none'; });
+    };
+    $('#waProvider')?.addEventListener('change', show);
+    show();
+    waf.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(waf);
+      const notifyOn = {};
+      for (const st of S.statuses || []) notifyOn[st.id] = fd.get('on_' + st.id) != null;
+      const templates = {};
+      for (const k of ['new', 'received', 'preparing', 'on_way', 'delivered', 'cancelled', 'paid', 'payment_link', 'staff_new']) {
+        const v = fd.get('tpl_' + k);
+        if (v != null) templates[k] = v;
+      }
+      const body = {
+        enabled: fd.get('enabled') != null,
+        provider: fd.get('provider'),
+        defaultCountryCode: fd.get('defaultCountryCode'),
+        requireOptIn: fd.get('requireOptIn') != null,
+        staffEnabled: fd.get('staffEnabled') != null,
+        staffNumbers: String(fd.get('staffNumbers') || '').split(',').map((x) => x.trim()).filter(Boolean),
+        notifyOn, templates,
+        meta: { token: fd.get('meta_token'), phoneId: fd.get('meta_phoneId'), templateName: fd.get('meta_templateName'), templateLang: fd.get('meta_templateLang') },
+        twilio: { accountSid: fd.get('twilio_accountSid'), authToken: fd.get('twilio_authToken'), from: fd.get('twilio_from') },
+        greenapi: { baseUrl: fd.get('greenapi_baseUrl'), instanceId: fd.get('greenapi_instanceId'), token: fd.get('greenapi_token') },
+        ultramsg: { instanceId: fd.get('ultramsg_instanceId'), token: fd.get('ultramsg_token') },
+        callmebot: { apiKey: fd.get('callmebot_apiKey') },
+      };
+      try {
+        await api.req('/api/admin/whatsapp', { method: 'PATCH', body });
+        const d = await api.req('/api/admin/whatsapp');
+        AD.waCfg = d.config; AD.waTemplates = d.templates; AD.waLog = d.log || [];
+        S = (await api.req('/api/bootstrap')).settings;
+        toast('تم حفظ إعدادات الواتساب ✅');
+        softRefreshAdmin();
+      } catch (err) { toast(err.message, 4000); }
+    });
+  }
+
+  const setf = $('#settingsForm');
+  if (setf) setf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(setf);
+    const body = {};
+    for (const k of ['name', 'tagline', 'phone', 'whatsapp', 'address', 'hoursText', 'deliveryEta']) body[k] = fd.get(k);
+    for (const k of ['openHour', 'closeHour', 'deliveryFee', 'freeDeliveryOver', 'minOrder']) body[k] = Number(fd.get(k) || 0);
+    body.aiAutoImages = fd.get('aiAutoImages') != null;
+    try {
+      const d = await api.req('/api/admin/settings', { method: 'PATCH', body });
+      S = d.settings; toast('تم حفظ الإعدادات ✅'); softRender();
+    } catch (err) { toast(err.message, 3500); }
+  });
+}
+
+/* ============================== ١٩) تأكيد الطلب ============================== */
+async function submitOrder(e) {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  const customer = {
+    name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'),
+    address: fd.get('address'), time: fd.get('time'), notes: fd.get('notes'),
+  };
+  const body = {
+    items: cart.map((c) => ({ id: c.id, qty: c.qty, addons: c.addons, note: c.note })),
+    customer, payment: fd.get('payment'), promoCode: promoCode || undefined,
+    notifyWhatsapp: fd.get('notifyWhatsapp') != null,
+  };
+  const btn = $('button[type=submit]', form);
+  if (btn) { btn.disabled = true; btn.textContent = 'بنسجّل طلبك…'; }
+  try {
+    const d = await api.req('/api/orders', { method: 'POST', body });
+    cart = []; promoCode = ''; saveCart();
+    MY.loaded = false;
+    await loadMyOrders();
+    /* لو الدفع أونلاين: نودّيه على صفحة الدفع فورًا (رابط جاي من السيرفر) */
+    if (d.payment && d.payment.url) {
+      toast(`تم استلام طلبك ${d.order.id} — هتتوجّه للدفع 💳`, 3000);
+      setTimeout(() => { location.href = d.payment.url; }, 600);
+      return;
+    }
+    toast(`تم استلام طلبك ${d.order.id} 🔥`, 4000);
+    go('order/' + d.order.id);
+  } catch (err) {
+    toast(err.message, 4000);
+    if (btn) { btn.disabled = false; btn.textContent = 'تأكيد الطلب 🍖'; }
+  }
+}
+
+/* ============================== ٢٠) كل الضغطات ============================== */
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-act]');
+  const notifBtn = e.target.closest('#notifBtn');
+  if (notifBtn) { toggleNotifPanel(); return; }
+  if (!el) {
+    const np = $('#notifPanel');
+    if (np && !np.classList.contains('hidden') && !e.target.closest('#notifPanel')) np.classList.add('hidden');
+    return;
+  }
+  const act = el.getAttribute('data-act');
+  const id = el.getAttribute('data-id');
+
+  switch (act) {
+    case 'nav': go(el.getAttribute('data-to')); break;
+    case 'cat': { const c = CATS.find((x) => x.id === id); go('menu?cat=' + encodeURIComponent(c ? c.name : '')); break; }
+    case 'filter': {
+      const c = CATS.find((x) => x.id === id);
+      const q = new URLSearchParams(location.hash.split('?')[1] || '');
+      c ? q.set('cat', c.name) : q.delete('cat');
+      go('menu?' + q);
+      break;
+    }
+    case 'item': openSheet(id); break;
+    case 'sheet-close': closeSheet(); break;
+    case 'addon': {
+      const list = (S.addons && (S.addons[sheet.item.cat] || S.addons.default)) || [];
+      const a = list[Number(el.getAttribute('data-i'))];
+      const i = sheet.addons.indexOf(a);
+      i >= 0 ? sheet.addons.splice(i, 1) : sheet.addons.push(a);
+      refreshSheet();
+      break;
+    }
+    case 'sheet-plus': sheet.qty++; refreshSheet(); break;
+    case 'sheet-minus': sheet.qty = Math.max(1, sheet.qty - 1); refreshSheet(); break;
+    case 'sheet-add': {
+      const n = $('#sheetNote');
+      addToCart(sheet.item, sheet.qty, sheet.addons.slice(), n ? n.value : '');
+      closeSheet();
+      break;
+    }
+    case 'plus': case 'minus': {
+      const c = cart.find((x) => x.key === el.getAttribute('data-key'));
+      if (!c) break;
+      if (act === 'plus') c.qty++;
+      else { c.qty--; if (c.qty <= 0) cart = cart.filter((x) => x !== c); }
+      saveCart(); softRender();
+      break;
+    }
+    case 'rm': cart = cart.filter((x) => x.key !== el.getAttribute('data-key')); saveCart(); toast('تم الحذف'); softRender(); break;
+    case 'promo': {
+      const v = ($('#promoInput') ? $('#promoInput').value : '').trim().toUpperCase();
+      const p = (S.promos || []).find((x) => x.code.toUpperCase() === v);
+      if (!v) { promoCode = ''; softRender(); break; }
+      if (!p) { toast('الكود مش صحيح'); break; }
+      promoCode = p.code; toast('تم تطبيق ' + p.code); softRender();
+      break;
+    }
+    case 'logout':
+      try { await api.req('/api/auth/logout', { method: 'POST' }); } catch {}
+      api.setToken(''); ME = null; NOTIFS = []; MY.orders = []; MY.loaded = false;
+      if (es) { es.close(); es = null; }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      toast('تم تسجيل الخروج'); go('home');
+      break;
+    case 'demo':
+      try {
+        const d = await api.req('/api/auth/demo', { method: 'POST' });
+        api.setToken(d.token); ME = d.user; MY.loaded = false;
+        if (S.realtime === false) startPolling(20000); else connectSSE();
+        await loadNotifs();
+        toast(`أهلًا ${ME.name} 👋`); go('account');
+      } catch (err) { toast(err.message); }
+      break;
+    case 'pay-now': {
+      toast('بنجهّزلك صفحة الدفع… ⏳', 2500);
+      try {
+        const d = await api.req('/api/orders/' + encodeURIComponent(id) + '/pay', { method: 'POST' });
+        if (d.url) { location.href = d.url; break; }
+        toast(d.alreadyPaid ? 'الطلب ده مدفوع بالفعل ✅' : 'مقدرناش نجهّز رابط دفع');
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+
+    case 'cancelOrder':
+      if (confirm('متأكد إنك عايز تلغي الطلب؟')) {
+        try { await api.req('/api/orders/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }); await loadMyOrders(true); toast('تم إلغاء الطلب'); softRender(); }
+        catch (err) { toast(err.message, 3500); }
+      }
+      break;
+
+    /* ---- الإشعارات ---- */
+    case 'notif-open': {
+      const n = NOTIFS.find((x) => String(x.id) === String(id));
+      if (n && !n.read) { try { await api.req('/api/notifications/read', { method: 'POST', body: { id: n.id } }); n.read = true; } catch {} }
+      const panel = $('#notifPanel'); if (panel) panel.classList.add('hidden');
+      const orderId = el.getAttribute('data-order');
+      if (orderId) {
+        if (!AD.orders.some((o) => o.id === orderId)) { await loadAdminOrders(); }
+        openOrderDrawer(orderId);
+      }
+      break;
+    }
+    case 'notif-read-all': try { await api.req('/api/notifications/read', { method: 'POST', body: { all: true } }); await loadNotifs(); renderNotifPanel(); } catch {} break;
+    case 'notif-close': { const p = $('#notifPanel'); if (p) p.classList.add('hidden'); break; }
+
+    /* ---- الإدارة ---- */
+    case 'admin-tab': go('admin?tab=' + id); break;
+    case 'admin-filter': AD.status = id; await loadAdminOrders(); softRefreshAdmin(); break;
+    case 'admin-pay-filter': AD.payment = id; await loadAdminOrders(); softRefreshAdmin(); break;
+    case 'admin-range': AD.range = el.getAttribute('data-v'); await loadAdminOrders(); softRefreshAdmin(); break;
+    case 'admin-filter-cust': AD.tab = 'orders'; AD.q = el.getAttribute('data-q') || ''; go('admin?tab=orders'); await loadAdminOrders(); softRefreshAdmin(); break;
+    case 'order-detail': openOrderDrawer(id); break;
+    case 'drawer-close': closeDrawer(); break;
+    case 'set-status': {
+      try {
+        await api.req('/api/admin/orders/' + encodeURIComponent(id) + '/status', { method: 'PATCH', body: { status: el.getAttribute('data-v') } });
+        await loadAdminStats(); await loadAdminOrders();
+        toast('تم تحديث حالة الطلب ✅');
+        softRefreshAdmin();
+        if ($('#drawer') && $('#drawer').classList.contains('show')) openOrderDrawer(id);
+      } catch (err) { toast(err.message, 3500); }
+      break;
+    }
+    case 'force': {
+      try {
+        await api.req('/api/admin/settings', { method: 'PATCH', body: { forceState: el.getAttribute('data-v') || null } });
+        S = (await api.req('/api/bootstrap')).settings;
+        toast('تم التحديث'); softRender();
+      } catch (err) { toast(err.message); }
+      break;
+    }
+    /* ---- المنيو ---- */
+    case 'menu-new': AD.editing = { __new: true, cat: CATS[0] && CATS[0].id, active: true }; softRefreshAdmin(); break;
+    case 'menu-edit': AD.editing = { ...byId(id) }; softRefreshAdmin(); break;
+    case 'menu-cancel': AD.editing = null; softRefreshAdmin(); break;
+    case 'menu-toggle': {
+      const m = byId(id);
+      try {
+        await api.req('/api/admin/menu/' + encodeURIComponent(id), { method: 'PATCH', body: { active: m.active === false } });
+        MENU = (await api.req('/api/bootstrap')).menu; softRefreshAdmin();
+      } catch (err) { toast(err.message); }
+      break;
+    }
+    case 'menu-del':
+      if (confirm('حذف الصنف نهائيًا؟')) {
+        try { await api.req('/api/admin/menu/' + encodeURIComponent(id), { method: 'DELETE' }); MENU = (await api.req('/api/bootstrap')).menu; toast('تم الحذف'); softRefreshAdmin(); }
+        catch (err) { toast(err.message); }
+      }
+      break;
+    case 'pick-img': {
+      if (!AD.editing) break;
+      AD.editing.image = el.getAttribute('data-url');
+      if (AD.editing.id) {
+        try { await api.req('/api/admin/menu/' + encodeURIComponent(AD.editing.id), { method: 'PATCH', body: { image: AD.editing.image } }); MENU = (await api.req('/api/bootstrap')).menu; toast('تم تغيير الصورة ✅'); }
+        catch (err) { toast(err.message); }
+      }
+      softRefreshAdmin();
+      break;
+    }
+    case 'gen-one': {
+      if (!AD.editing || !AD.editing.id) { toast('احفظ الصنف الأول'); break; }
+      toast('بنولّد صورة… ⏳', 4000);
+      try {
+        const d = await api.req('/api/admin/menu/' + encodeURIComponent(AD.editing.id) + '/generate-image', { method: 'POST' });
+        AD.editing.image = d.item.image;
+        MENU = (await api.req('/api/bootstrap')).menu;
+        toast(`تم توليد صورة (${d.provider}) ✅`);
+        softRefreshAdmin();
+      } catch (err) { toast(err.message, 3500); }
+      break;
+    }
+    case 'gen-one': break;
+    case 'gen-missing': case 'gen-all': {
+      toast('بنولّد الصور… ممكن تاخد لحظة ⏳', 5000);
+      try {
+        const d = await api.req('/api/admin/menu/generate-images', { method: 'POST', body: { only: act === 'gen-missing' ? 'missing' : 'all' } });
+        MENU = (await api.req('/api/bootstrap')).menu;
+        toast(`تم توليد/تحديث ${d.generated} صورة ✅`, 4000);
+        softRefreshAdmin();
+      } catch (err) { toast(err.message, 3500); }
+      break;
+    }
+    /* ---- المستخدمون ---- */
+    case 'user-active': {
+      try {
+        await api.req('/api/admin/users/' + encodeURIComponent(id), { method: 'PATCH', body: { active: el.getAttribute('data-v') === '1' } });
+        AD.users = (await api.req('/api/admin/users')).users;
+        toast('تم التحديث ✅'); softRefreshAdmin();
+      } catch (err) { toast(err.message, 3500); }
+      break;
+    }
+    /* ---- الدفع والواتساب (إجراءات) ---- */
+    case 'pay-mark': {
+      try {
+        await api.req('/api/admin/orders/' + encodeURIComponent(id) + '/payment', { method: 'PATCH', body: { status: el.getAttribute('data-v') } });
+        await loadAdminStats(); await loadAdminOrders();
+        toast('تم تحديث حالة الدفع ✅');
+        softRefreshAdmin();
+        if ($('#drawer') && $('#drawer').classList.contains('show')) openOrderDrawer(id);
+      } catch (err) { toast(err.message, 3500); }
+      break;
+    }
+    case 'wa-send': {
+      try {
+        const d = await api.req('/api/admin/orders/' + encodeURIComponent(id) + '/whatsapp', { method: 'POST', body: {} });
+        const r = d.row || {};
+        toast(r.result === 'sent' ? 'اتبعتت على واتساب ✅' : r.result === 'console' ? 'اتبعتت (وضع console — شوف السيرفر)' : r.result === 'link' ? 'الرسالة جاهزة — افتح الرابط' : 'اتجاهلت: ' + (r.error || ''), 4000);
+        if (AD.waCfg) { const x = await api.req('/api/admin/whatsapp'); AD.waCfg = x.config; AD.waTemplates = x.templates; AD.waLog = x.log || []; softRefreshAdmin(); }
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+    case 'wa-paylink': {
+      try {
+        const d = await api.req('/api/admin/orders/' + encodeURIComponent(id) + '/whatsapp', { method: 'POST', body: { kind: 'payment_link' } });
+        const r = d.row || {};
+        toast(r.result === 'sent' ? 'اتبعت رابط الدفع ✅' : r.result === 'link' ? 'رابط الدفع جاهز — افتحه من السجل' : 'تم تجهيز رابط الدفع', 4000);
+        await loadAdminOrders(); softRefreshAdmin();
+        if ($('#drawer') && $('#drawer').classList.contains('show')) openOrderDrawer(id);
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+    case 'pay-test': {
+      toast('بنجرّب الاتصال… ⏳', 4000);
+      try {
+        const d = await api.req('/api/admin/payments/test', { method: 'POST' });
+        toast((d.ok ? '✅ ' : '❌ ') + d.message, 5000);
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+    case 'wa-test': {
+      const phone = prompt('اكتب رقم للاختبار (بكود الدولة أو 01…):', S.whatsapp || '');
+      if (!phone) break;
+      toast('بنبعت رسالة تجربة… ⏳', 4000);
+      try {
+        const d = await api.req('/api/admin/whatsapp/test', { method: 'POST', body: { phone } });
+        const r = d.row || {};
+        toast(r.result === 'sent' ? 'وصلت الرسالة ✅' : r.result === 'console' ? 'اتبعتت (console)' : r.result === 'link' ? 'رابط جاهز في السجل' : 'فشلت: ' + (r.error || ''), 5000);
+        const x = await api.req('/api/admin/whatsapp'); AD.waCfg = x.config; AD.waTemplates = x.templates; AD.waLog = x.log || []; softRefreshAdmin();
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+    case 'wa-resend': {
+      try {
+        await api.req('/api/admin/whatsapp/test', { method: 'POST', body: { phone: el.getAttribute('data-phone'), text: el.getAttribute('data-text') } });
+        toast('تمت إعادة الإرسال ✅');
+        const x = await api.req('/api/admin/whatsapp'); AD.waCfg = x.config; AD.waTemplates = x.templates; AD.waLog = x.log || []; softRefreshAdmin();
+      } catch (err) { toast(err.message, 4000); }
+      break;
+    }
+    case 'copy-url': {
+      try { await navigator.clipboard.writeText(el.getAttribute('data-url')); toast('تم النسخ ✅'); }
+      catch { toast('انسخ الرابط يدويًا: ' + el.getAttribute('data-url'), 6000); }
+      break;
+    }
+
+    case 'backup': {
+      try {
+        const d = await api.req('/api/admin/backup');
+        const blob = new Blob([JSON.stringify(d.backup, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `bbq-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        toast('تم تنزيل النسخة الاحتياطية ✅');
+      } catch (err) { toast(err.message); }
+      break;
+    }
+  }
+});
+
+/* تغيير الدور من القائمة المنسدلة */
+document.addEventListener('change', async (e) => {
+  const sel = e.target.closest('[data-act="user-role"]');
+  if (!sel) return;
+  try {
+    await api.req('/api/admin/users/' + encodeURIComponent(sel.getAttribute('data-id')), { method: 'PATCH', body: { role: sel.value } });
+    AD.users = (await api.req('/api/admin/users')).users;
+    toast('تم تغيير الصلاحية ✅'); softRefreshAdmin();
+  } catch (err) { toast(err.message, 3500); AD.users = (await api.req('/api/admin/users')).users; softRefreshAdmin(); }
+});
+
+window.addEventListener('hashchange', () => { closeSheet(); closeDrawer(); render({ scroll: true }); });
+
+/* ============================== ٢١) التشغيل ============================== */
+(async function boot() {
+  try {
+    await loadBootstrap();
+  } catch (e) {
+    document.getElementById('view').innerHTML = `<div class="empty" style="padding-top:80px">
+      <div class="big">🔌</div><h3>مش قادر أوصل للسيرفر</h3>
+      <p>شغّل السيرفر الأول: <code>npm start</code> وبعدين افتح نفس الرابط</p></div>`;
+    return;
+  }
+  await render({ force: true, scroll: true });
+  if (ME) {
+    await loadNotifs();
+    if (S.realtime === false) startPolling(20000);     // استضافة سيرفرلس → تحديث دوري
+    else { connectSSE(); setInterval(() => { if (isStaff()) loadNotifs(); }, 30000); }   // احتياطي لو SSE قفل
+  }
+})();

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>إتمام الدفع — The Original BBQ</title>
+  <meta name="theme-color" content="#121010" />
+  <style>
+    :root { --bg:#121010; --surface:#1b1815; --surface-2:#241f1b; --border:#322b26; --text:#f6f0e9;
+            --muted:#a89d94; --ember:#ff6b2c; --ember-2:#ffb020; --gold:#f5c869; --green:#34c07a; --red:#ef5350;
+            --font:'Segoe UI','Noto Kufi Arabic',Tahoma,system-ui,sans-serif; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font); min-height:100vh;
+           display:flex; align-items:center; justify-content:center; padding:18px; }
+    body::before { content:''; position:fixed; inset:0; pointer-events:none;
+      background: radial-gradient(700px 380px at 80% -10%, rgba(255,107,44,.14), transparent 60%),
+                  radial-gradient(600px 340px at 0% 105%, rgba(255,176,32,.09), transparent 60%); }
+    .card { position:relative; width:100%; max-width:460px; background:var(--surface); border:1px solid var(--border);
+            border-radius:22px; padding:22px; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+    .brand { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+    .logo { width:42px;height:42px;border-radius:13px;display:grid;place-items:center;font-size:21px;
+            background:linear-gradient(135deg,var(--ember),var(--ember-2)); box-shadow:0 6px 18px rgba(255,107,44,.35); }
+    .brand b { font-size:16px; } .brand span { display:block; font-size:12px; color:var(--muted); }
+    h1 { font-size:20px; margin:16px 0 4px; } p.sub { margin:0 0 16px; color:var(--muted); font-size:13px; }
+    .badge { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:999px; font-size:12px;
+             font-weight:800; background:rgba(255,176,32,.12); border:1px solid rgba(255,176,32,.35); color:var(--ember-2); }
+    .box { background:var(--surface-2); border:1px solid var(--border); border-radius:16px; padding:14px; margin-top:14px; }
+    .row { display:flex; justify-content:space-between; gap:12px; padding:6px 0; font-size:14px; }
+    .row + .row { border-top:1px dashed var(--border); }
+    .row.total { font-weight:800; font-size:17px; border-top:1px solid var(--border); margin-top:6px; padding-top:12px; }
+    .price { color:var(--gold); font-weight:800; }
+    .btn { display:block; width:100%; padding:15px; border:0; border-radius:14px; font-weight:800; font-size:15px;
+           font-family:inherit; cursor:pointer; margin-top:10px; }
+    .btn-pay { background:linear-gradient(135deg,var(--ember),var(--ember-2)); color:#1a0d05;
+               box-shadow:0 10px 26px rgba(255,107,44,.32); }
+    .btn-fail { background:transparent; color:var(--red); border:1px solid rgba(239,83,80,.35); }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    .note { font-size:12px; color:var(--muted); text-align:center; margin-top:14px; line-height:1.7; }
+    .kv { display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:13px; color:var(--muted); }
+    .kv b { color:var(--text); font-weight:700; }
+    .items { max-height:180px; overflow:auto; }
+    .spinner { width:34px;height:34px;border-radius:50%;border:3px solid var(--border);border-top-color:var(--ember);
+               animation:spin .8s linear infinite; margin:26px auto; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .center { text-align:center; }
+    .ok { color:var(--green); font-size:44px; }
+    .err { color:var(--red); font-size:44px; }
+    .secure { display:flex; align-items:center; justify-content:center; gap:6px; font-size:11.5px; color:var(--muted); margin-top:12px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="brand">
+      <span class="logo">🔥</span>
+      <span><b>The Original BBQ</b><span>مشاوي على الفحم</span></span>
+    </div>
+    <div id="body"><div class="spinner"></div></div>
+  </div>
+
+<script>
+const q = new URLSearchParams(location.search);
+const ref = q.get('ref') || '';
+const token = q.get('t') || '';
+const $ = (s) => document.querySelector(s);
+const money = (n, cur) => `${Math.round(Number(n) || 0).toLocaleString('en-US')} ${cur || 'ج.م'}`;
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+async function load() {
+  try {
+    const r = await fetch(`/api/payments/demo/info?ref=${encodeURIComponent(ref)}&t=${encodeURIComponent(token)}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'رابط غير صالح');
+    render(d.order);
+  } catch (e) {
+    $('#body').innerHTML = `
+      <div class="center" style="padding:20px 0">
+        <div class="err">⚠️</div>
+        <h1>ينفع نكمل الدفع؟</h1>
+        <p class="sub">${esc(e.message)}</p>
+        <a class="btn btn-fail" style="text-decoration:none;text-align:center" href="/#/orders">رجوع لطلباتي</a>
+      </div>`;
+  }
+}
+
+function render(order) {
+  const items = (order.items || []).map((i) => `
+    <div class="kv"><span>${esc(i.name)} ×${i.qty}</span><b>${money(i.line_total || i.price * i.qty, order.currency)}</b></div>`).join('');
+  const alreadyPaid = order.payment_status === 'paid';
+  $('#body').innerHTML = `
+    <span class="badge">🧪 صفحة دفع تجريبية (محاكاة)</span>
+    <h1>إتمام دفع طلب ${esc(order.id)}</h1>
+    <p class="sub">دي صفحة محاكاة عشان تجرّب الدورة كاملة من غير أي حساب دفع حقيقي.</p>
+
+    <div class="box">
+      <div class="kv"><span>الطلب</span><b>${esc(order.id)}</b></div>
+      <div class="kv"><span>العميل</span><b>${esc(order.customer.name || '')}</b></div>
+      <div class="kv"><span>الهاتف</span><b>${esc(order.customer.phone || '')}</b></div>
+      ${order.customer.address ? `<div class="kv"><span>العنوان</span><b>${esc(order.customer.address)}</b></div>` : ''}
+    </div>
+
+    <div class="box">
+      <strong style="font-size:14px">الطلب</strong>
+      <div class="items">${items}</div>
+      <div class="row total"><span>الإجمالي</span><span class="price">${money(order.total, order.currency)}</span></div>
+    </div>
+
+    ${alreadyPaid ? `
+      <div class="center" style="padding:10px 0 0">
+        <div class="ok">✅</div>
+        <p class="sub">الطلب ده مدفوع بالفعل — مفيش حاجة تدفعها تاني.</p>
+        <a class="btn btn-pay" style="text-decoration:none;text-align:center" href="/#/order/${encodeURIComponent(order.id)}">رجوع للطلب</a>
+      </div>` : `
+      <button class="btn btn-pay" id="payBtn">ادفع ${money(order.total, order.currency)} 💳</button>
+      <button class="btn btn-fail" id="failBtn">تجربة حالة فشل الدفع</button>
+      <div class="secure">🔒 في الوضع الحقيقي بيتم توجيهك لـ Stripe / Paymob</div>`}
+  `;
+  if (alreadyPaid) return;
+  $('#payBtn').onclick = () => complete(true);
+  $('#failBtn').onclick = () => complete(false);
+}
+
+async function complete(ok) {
+  const btns = document.querySelectorAll('.btn');
+  btns.forEach((b) => { b.disabled = true; });
+  $('#body').insertAdjacentHTML('afterbegin', '<div class="spinner"></div>');
+  try {
+    const r = await fetch('/api/payments/demo/complete', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref, token, ok }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'فشل');
+    $('#body').innerHTML = `
+      <div class="center" style="padding:14px 0">
+        <div class="${ok ? 'ok' : 'err'}">${ok ? '✅' : '✖️'}</div>
+        <h1>${ok ? 'تم الدفع بنجاح' : 'فشل الدفع'}</h1>
+        <p class="sub">${ok ? 'وصلك تأكيد على واتساب، والطلب دخل قائمة التجهيز.' : 'تقدر تجرّب تاني أو تختار الدفع عند الاستلام.'}</p>
+        <div class="spinner"></div>
+        <p class="note">بنرجّعك للطلب…</p>
+      </div>`;
+    setTimeout(() => { location.href = d.redirect || ('/#/order/' + ref); }, 1400);
+  } catch (e) {
+    $('#body').innerHTML = `<div class="center"><div class="err">⚠️</div><h1>حصلت مشكلة</h1><p class="sub">${esc(e.message)}</p>
+      <a class="btn btn-pay" style="text-decoration:none;text-align:center" href="/#/order/${encodeURIComponent(ref)}">رجوع للطلب</a></div>`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>
