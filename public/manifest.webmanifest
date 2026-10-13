@@ -6,8 +6,8 @@
   "dir": "rtl",
   "start_url": "/#/",
   "display": "standalone",
-  "background_color": "#121010",
-  "theme_color": "#121010",
+  "background_color": "#151010",
+  "theme_color": "#151010",
   "icons": [
     { "src": "/img/ai-hero.jpg", "sizes": "512x512", "type": "image/jpeg", "purpose": "any" }
   ]

@@ -5,12 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>The Original BBQ — مشاوي على الفحم</title>
   <meta name="description" content="The Original BBQ — اطلب مشاوي على الفحم وتابع طلبك خطوة بخطوة." />
-  <meta name="theme-color" content="#121010" />
+  <meta name="theme-color" content="#151010" />
+  <meta name="color-scheme" content="light dark" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/img/ai-hero.jpg" />
   <link rel="stylesheet" href="/styles.css" />
+  <script>
+    /* طبّق الثيم قبل أول رسم عشان مفيش وامضة بيضاء/سوداء */
+    (function () {
+      try {
+        var t = localStorage.getItem('bbq_theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    })();
+  </script>
 </head>
 <body>
   <div id="view"></div>

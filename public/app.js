@@ -42,6 +42,35 @@ function toast(msg, ms = 2400) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.innerHTML = ''; }, ms);
 }
 
+/* ============================== الثيم (فاتح/داكن) ==============================
+   الألوان كلها من CSS (`--*`) والتبديل بيغيّر `data-theme` على <html> بس.
+   الاختيار محفوظ في localStorage، والافتراضي = إعداد النظام. */
+const THEME_KEY = 'bbq_theme';
+function getTheme() {
+  try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark') return t; } catch {}
+  return (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+}
+function applyTheme(t, persist = true) {
+  document.documentElement.setAttribute('data-theme', t);
+  if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch {} }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
+  const btn = $('#themeBtn');
+  if (btn) { btn.textContent = t === 'light' ? '☀️' : '🌙'; btn.title = t === 'light' ? 'الوضع الفاتح — اضغط لليل' : 'الوضع الليلي — اضغط للفاتح'; }
+  // زر صفحة "حسابي" — نفس الوظيفة بس بنص وصفي
+  $$('[data-act="theme"]').forEach((b) => {
+    if (b.id === 'themeBtn') return;
+    b.innerHTML = t === 'light' ? '☀️ الوضع الفاتح' : '🌙 الوضع الليلي';
+  });
+}
+function toggleTheme() {
+  const next = getTheme() === 'light' ? 'dark' : 'light';
+  applyTheme(next);
+  toast(next === 'light' ? 'الوضع الفاتح ☀️' : 'الوضع الليلي 🌙', 1600);
+}
+/* طبّق الثيم فورًا قبل رسم أي حاجة (بيتكرّر كمان في index.html عشان مفيش وامضة) */
+applyTheme(getTheme(), false);
+
 /* ============================== ٢) الاتصال بالسيرفر ============================== */
 const TOKEN_KEY = 'bbq_token';
 const api = {
@@ -136,7 +165,7 @@ function statusOf(id) { return (S.statuses || []).find((s) => s.id === id) || { 
 /* ===== حالة الدفع ===== */
 const PAY_STATES = {
   paid:     { label: 'مدفوع',                icon: '✅', color: 'var(--green)' },
-  pending:  { label: 'بانتظار الدفع',        icon: '⏳', color: 'var(--ember-2)' },
+  pending:  { label: 'بانتظار الدفع',        icon: '⏳', color: 'var(--link)' },
   unpaid:   { label: 'الدفع عند الاستلام',    icon: '💵', color: 'var(--muted)' },
   failed:   { label: 'فشل الدفع',            icon: '⚠️', color: 'var(--red)' },
   refunded: { label: 'مرتجع',                icon: '↩️', color: 'var(--blue)' },
@@ -162,6 +191,7 @@ function headerHTML(active) {
       </span>
     </a>
     ${isStaff() ? `<button class="icon-btn" id="notifBtn" title="الإشعارات">🔔${unread ? `<span class="badge-n red">${unread}</span>` : ''}</button>` : ''}
+    <button class="icon-btn" id="themeBtn" data-act="theme" title="تبديل الثيم">${getTheme() === 'light' ? '☀️' : '🌙'}</button>
     <a class="icon-btn" href="tel:${h(S.phone || '')}" title="اتصال">📞</a>
     <button class="icon-btn" data-act="nav" data-to="cart" title="السلة">🛒<span class="badge-n ${cartCount() ? '' : 'hidden'}" id="headBadge">${cartCount()}</span></button>
   </header>`;
@@ -451,7 +481,7 @@ function viewsCart() {
       <div class="line total"><span>الإجمالي</span><span class="price">${money(t.total)}</span></div>
     </div>
 
-    ${short > 0 ? `<div class="box center" style="margin-top:12px;border-color:rgba(255,176,32,.35)">أقل مبلغ للطلب ${money(S.minOrder)} — باقي ${money(short)}</div>` : ''}
+    ${short > 0 ? `<div class="box center" style="margin-top:12px;border-color:color-mix(in srgb, var(--gold) 45%, transparent)">أقل مبلغ للطلب ${money(S.minOrder)} — باقي ${money(short)}</div>` : ''}
     <button class="btn btn-primary btn-block" style="margin-top:14px" data-act="nav" data-to="checkout" ${short > 0 ? 'disabled' : ''}>
       متابعة الطلب — ${money(t.total)}
     </button>
@@ -564,7 +594,7 @@ function viewsOrders() {
             <div class="small muted" style="margin-top:6px">${h(fmtDT(o.createdAt))} · ${o.items.length} صنف</div>
             <div class="small" style="margin-top:8px">${h(o.items.map((i) => `${i.name} ×${i.qty}`).join('، '))}</div>
             <div class="row" style="justify-content:space-between;margin-top:10px">
-              <span class="price">${money(o.total)}</span><span style="color:var(--ember-2);font-weight:700">تتبع الطلب ←</span>
+              <span class="price">${money(o.total)}</span><span style="color:var(--link);font-weight:700">تتبع الطلب ←</span>
             </div>
           </div>
         </button>`).join('')}
@@ -678,10 +708,10 @@ function authPageHTML(kind, q) {
       <button class="btn btn-primary btn-block" type="submit">${isLogin ? 'دخول' : isReset ? 'حفظ كلمة السر' : 'إنشاء الحساب'}</button>
       <div class="center small muted" style="margin-top:12px">
         ${isLogin
-          ? `مش عندك حساب؟ <a href="#/signup${ret ? '?return=' + h(ret) : ''}" style="color:var(--ember-2)">أنشئ حساب</a>
-             · <a href="#/forgot" style="color:var(--ember-2)">نسيت كلمة السر؟</a>`
-          : isReset ? `<a href="#/login" style="color:var(--ember-2)">رجوع لتسجيل الدخول</a>`
-          : `عندك حساب؟ <a href="#/login${ret ? '?return=' + h(ret) : ''}" style="color:var(--ember-2)">سجّل الدخول</a>`}
+          ? `مش عندك حساب؟ <a href="#/signup${ret ? '?return=' + h(ret) : ''}" style="color:var(--link)">أنشئ حساب</a>
+             · <a href="#/forgot" style="color:var(--link)">نسيت كلمة السر؟</a>`
+          : isReset ? `<a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a>`
+          : `عندك حساب؟ <a href="#/login${ret ? '?return=' + h(ret) : ''}" style="color:var(--link)">سجّل الدخول</a>`}
       </div>
       ${isLogin ? `<div class="center" style="margin-top:14px">
         <button type="button" class="btn btn-sm btn-ghost" data-act="demo">دخول سريع بحساب تجريبي (عميل)</button>
@@ -702,7 +732,7 @@ function viewsAccount() {
       <div class="kpi"><b>${money(MY.orders.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + o.total, 0))}</b><span>إجمالي مشترياتي</span></div>
       <div class="kpi"><b>${cartCount()}</b><span>في السلة</span></div>
     </div>
-    ${staff ? `<div class="box" style="margin-top:12px;border-color:rgba(255,176,32,.35)">
+    ${staff ? `<div class="box" style="margin-top:12px;border-color:color-mix(in srgb, var(--gold) 45%, transparent)">
       <strong>أنت مسجّل كـ${ME.role === 'admin' ? 'أدمن' : 'مشرف'}</strong>
       <p class="small muted" style="margin:6px 0 10px">عندك وصول للوحة الإدارة: الطلبات، العملاء، الحالات، والإشعارات.</p>
       <a class="btn btn-primary btn-sm" href="#/admin">افتح لوحة الإدارة</a>
@@ -728,6 +758,7 @@ function viewsAccount() {
     <div class="btn-row" style="margin-top:12px">
       <a class="btn btn-ghost" href="#/orders">🧾 طلباتي</a>
       ${staff ? `<a class="btn btn-ghost" href="#/admin">🧑‍🍳 لوحة الإدارة</a>` : ''}
+      <button class="btn btn-ghost" data-act="theme">${getTheme() === 'light' ? '☀️ الوضع الفاتح' : '🌙 الوضع الليلي'}</button>
       <button class="btn btn-danger" data-act="logout">تسجيل الخروج</button>
     </div>
   </div>${footerHTML()}</main>`;
@@ -908,7 +939,7 @@ function adminMenuHTML() {
   </div>
 
   ${e ? `
-  <div class="box" style="margin-bottom:12px;border-color:rgba(255,176,32,.4)">
+  <div class="box" style="margin-bottom:12px;border-color:color-mix(in srgb, var(--gold) 45%, transparent)">
     <strong>${e.__new ? 'إضافة صنف جديد' : 'تعديل: ' + h(e.name)}</strong>
     <form id="menuForm" style="margin-top:10px">
       <input type="hidden" name="id" value="${h(e.id || '')}">
@@ -1243,7 +1274,7 @@ function openOrderDrawer(id) {
       <div class="box" style="margin-top:12px">
         <strong>بيانات العميل</strong>
         <div class="line"><span class="muted">الاسم</span><span>${h(o.customer.name)}</span></div>
-        <div class="line"><span class="muted">الهاتف</span><span><a href="tel:${h(o.customer.phone)}" style="color:var(--ember-2)">${h(o.customer.phone)}</a>
+        <div class="line"><span class="muted">الهاتف</span><span><a href="tel:${h(o.customer.phone)}" style="color:var(--link)">${h(o.customer.phone)}</a>
           <a class="btn btn-sm btn-ghost" style="margin-inline-start:6px" target="_blank" rel="noopener" href="https://wa.me/${h(String(o.customer.phone || '').replace(/\D/g, '').replace(/^0/, '20'))}">💬</a></span></div>
         <div class="line"><span class="muted">الإيميل</span><span class="small">${h(o.customer.email || '—')}</span></div>
         <div class="line"><span class="muted">العنوان</span><span class="small">${h(o.customer.area ? o.customer.area + ' — ' : '')}${h(o.customer.address)}</span></div>
@@ -1461,7 +1492,7 @@ async function render(opts = {}) {
       <form id="forgotForm" class="box" style="margin-top:14px">
         <label class="lbl">الإيميل</label><input name="email" type="email" required placeholder="you@example.com">
         <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">ابعت الرابط</button>
-        <div class="center small muted" style="margin-top:10px"><a href="#/login" style="color:var(--ember-2)">رجوع لتسجيل الدخول</a></div>
+        <div class="center small muted" style="margin-top:10px"><a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a></div>
       </form></div>${footerHTML()}</main>`;
   else if (r.name === 'reset') html = authPageHTML('reset', r.q);
   else if (r.name === 'admin') html = viewsAdmin(r.q);
@@ -1761,6 +1792,7 @@ document.addEventListener('click', async (e) => {
   const id = el.getAttribute('data-id');
 
   switch (act) {
+    case 'theme': toggleTheme(); break;
     case 'nav': go(el.getAttribute('data-to')); break;
     case 'cat': { const c = CATS.find((x) => x.id === id); go('menu?cat=' + encodeURIComponent(c ? c.name : '')); break; }
     case 'filter': {
