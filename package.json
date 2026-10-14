@@ -15,7 +15,9 @@
     "reset": "node server/reset.js",
     "test:ui": "node --test server/test-ui.js",
     "test:real": "node --test server/test-real.js",
-    "test:all": "npm test && npm run test:vercel && npm run test:real && npm run test:ui"
+    "test:supabase": "node --test server/test-supabase.js",
+    "import:backup": "node tools/import-backup.js",
+    "test:all": "npm test && npm run test:vercel && npm run test:real && npm run test:supabase && npm run test:ui"
   },
   "engines": {
     "node": ">=18"

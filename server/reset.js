@@ -6,7 +6,7 @@ const path = require('path');
 const store = require('./store');
 
 (async () => {
-  if (store.MODE !== 'file') throw new Error('This reset tool only supports file storage. Back up Redis before managing it in Upstash.');
+  if (store.MODE !== 'file') throw new Error('This reset tool only supports file storage. Back up the shared database first (admin dashboard backup, or tools/import-backup.js for Supabase).');
   await store.init();
   if (!fs.readdirSync(store.DATA_DIR).length) { console.log('ℹ️ مفيش بيانات تتصفّر.'); return; }
   if (!process.argv.includes('--hard')) {

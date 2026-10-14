@@ -251,8 +251,8 @@ async function api(req, res, u, url) {
       time: new Date().toISOString(),
       serverless: SERVERLESS,
       realtime: REALTIME,
-      storage: store.MODE,                                  // redis | file
-      persistent: store.MODE === 'redis' || !SERVERLESS,    // سيرفرلس من غير redis = مش دائم
+      storage: store.MODE,                                  // postgres | redis | file
+      persistent: store.MODE !== 'file' || !SERVERLESS,     // سيرفرلس من غير قاعدة سحابية = مش دائم
       appUrl: !!appUrl,
       ownerFromEnv: !!String(process.env.ADMIN_PASSWORD || '').trim() || !!String(process.env.ADMIN_PASSWORD_HASH || '').trim(),
     });
@@ -1018,10 +1018,18 @@ function serveStatic(req, res, url) {
 
 /* ============================== السيرفر ============================== */
 /* رسالة 503 للإعداد الناقص: جملة عامة للعميل + السبب الواضح لصاحب المطعم + تقرير تشخيص آمن. */
-const SETUP_DETAIL = {
-  STORAGE_UNAVAILABLE: 'السبب: قاعدة البيانات الدائمة (Upstash Redis) مش متوصلة — راجع UPSTASH_REDIS_REST_URL وUPSTASH_REDIS_REST_TOKEN في متغيرات البيئة على الاستضافة واعمل Redeploy.',
-  OWNER_NOT_CONFIGURED: 'السبب: حساب صاحب المطعم مش مجهّز — أضف ADMIN_PASSWORD (أو ADMIN_PASSWORD_HASH) في متغيرات البيئة على الاستضافة واعمل Redeploy.',
-};
+function setupDetail(code) {
+  if (code === 'OWNER_NOT_CONFIGURED') {
+    return 'السبب: حساب صاحب المطعم مش مجهّز — أضف ADMIN_PASSWORD (أو ADMIN_PASSWORD_HASH) في متغيرات البيئة على الاستضافة واعمل Redeploy.';
+  }
+  /* STORAGE_UNAVAILABLE: السبب بيعتمد على القاعدة المطلوبة حاليًا (Supabase أولًا) */
+  const setup = deployEnv.publicReport();
+  const keys = [...(setup.missing || []), ...(setup.invalid || [])];
+  if (keys.some((k) => k.startsWith('UPSTASH'))) {
+    return 'السبب: قاعدة البيانات الدائمة (Upstash Redis) مش متوصلة — راجع UPSTASH_REDIS_REST_URL وUPSTASH_REDIS_REST_TOKEN في متغيرات البيئة على الاستضافة واعمل Redeploy.';
+  }
+  return 'السبب: قاعدة البيانات الدائمة (Supabase PostgreSQL) مش متوصلة — راجع SUPABASE_URL وSUPABASE_SERVICE_ROLE_KEY في متغيرات البيئة على الاستضافة (بعد تشغيل migrations في SQL Editor) واعمل Redeploy.';
+}
 
 function sendJSON(res, code, data) {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -1053,7 +1061,7 @@ async function handle(req, res) {
         : e.message === 'too_large' ? 'الملف كبير جدًا (الحد 12 ميجا)' : e.status ? e.message : 'خطأ في السيرفر',
       /* التشخيص العام (أسماء المتغيرات الناقصة فقط، من غير قيم سرية) بيخلّي صفحة
          #/setup و /api/health يشرحوا الإصلاح بالظبط بدل صفحة «مش قادرين نوصل». */
-      ...(unavailable ? { code: e.code, detail: SETUP_DETAIL[e.code] || '', setup: deployEnv.publicReport() } : {}),
+      ...(unavailable ? { code: e.code, detail: setupDetail(e.code), setup: deployEnv.publicReport() } : {}),
     });
   }
 }
@@ -1067,13 +1075,15 @@ if (require.main === module) {
     console.log('🔥 The Original BBQ — التسجيل والطلبات شغالين على تخزين دائم');
     console.log(`   افتح: http://localhost:${PORT}`);
     console.log(`   الإدارة: /#/admin · صاحب المطعم: ${auth.OWNER_EMAIL}`);
-    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis' : 'قرص السيرفر — يلزم قرص دائم على الاستضافة'}`);
+    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis (بديل قديم)'
+      : store.MODE === 'postgres' ? 'Supabase PostgreSQL — دائم'
+        : 'قرص السيرفر — يلزم قرص دائم على الاستضافة'}`);
     if (process.env.APP_URL) console.log(`   APP_URL: ${process.env.APP_URL}`);
     /* تنبيهات الإعداد — نفس اللي بيظهر في تبويب 🛠️ النظام بلوحة الإدارة */
     const rep = await deployEnv.report({ ping: false });
     for (const w of rep.warnings) console.log(`   ${w.level === 'danger' ? '🚨' : '⚠️ '} ${w.message}`);
     if (rep.missing.length) console.log(`   🚨 متغيرات ناقصة: ${rep.missing.join('، ')}`);
-    if (rep.warnings.length || rep.missing.length) console.log('   الشرح: docs/VERCEL-UPSTASH.md');
+    if (rep.warnings.length || rep.missing.length) console.log(`   الشرح: ${store.MODE === 'redis' ? 'docs/VERCEL-UPSTASH.md' : 'docs/SUPABASE.md'}`);
     console.log('');
   })).catch((e) => {
     console.error('[startup]', e.message);
