@@ -43,8 +43,11 @@
     .card { position:relative; width:100%; max-width:460px; background:var(--surface); border:1px solid var(--border);
             border-radius:22px; padding:22px; box-shadow:var(--shadow);
             transition:background-color .25s ease, border-color .25s ease; }
-    .brand { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
-    .brand .logo-full { height:46px; width:auto; max-width:100%; }
+    .brand { display:flex; align-items:center; justify-content:center; gap:10px; margin:4px 0 12px; }
+    .brand .logo-full {
+      height:88px; width:auto; max-width:100%; object-fit:contain;
+      padding:6px 9px; background:#FFF9F4; border:1px solid #F1D9CE; border-radius:14px;
+    }
     h1 { font-size:20px; margin:16px 0 4px; } p.sub { margin:0 0 16px; color:var(--muted); font-size:13px; }
     .badge { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:999px; font-size:12px;
              font-weight:800; background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--link); }
