@@ -18,6 +18,9 @@
 
 ## 📋 المحتويات
 
+> 📌 **عايز الخطوات بالتفصيل من الصفر؟** [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md) —
+> إنشاء قاعدة Upstash → نسخ الرابط والتوكن → إضافتهم في Vercel → Redeploy → التأكد (بالصور والنسخ/اللصق).
+
 1. [قبل ما تبدأ](#١-قبل-ما-تبدأ)
 2. [الطريق أ: Vercel + Upstash (المُوصى به)](#٢-الطريق-أ-vercel--upstash)
 3. [جدول متغيرات البيئة الكامل](#٣-جدول-متغيرات-البيئة-الكامل)
@@ -114,7 +117,9 @@ git push -u origin main
    | `ADMIN_PASSWORD` | كلمة السر الأولية المطلوبة — إعداد خاص، لا تنشره في الكود |
    | `DEMO_LOGIN`, `SEED_DEMO`, `ALLOW_DEMO_PAYMENTS`, `ALLOW_CONSOLE_MAIL` | `0` |
 
-5. **Deploy** ✅ — هياخد أقل من دقيقة.
+5. **Redeploy بعد أي تغيير في المتغيرات:** المتغيرات مش بتتطبّق على deploy قديم —
+   **Deployments → ⋯ → Redeploy** (أو `vercel --prod`).
+6. **Deploy** ✅ — هياخد أقل من دقيقة.
 
 > `vercel.json` موجود ومضبوط بالفعل (حد ٣٠ ثانية للدالة، ١٠٢٤ ميجا، وكاش للصور).
 > ومفيش داعي لأي rewrites: كل الروابط في الواجهة **hash-based** (`/#/admin`، `/#/order/BBQ-1001`).
@@ -123,8 +128,10 @@ git push -u origin main
 
 | الفحص | إزاي | المفروض |
 |---|---|---|
-| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `{"ok":true,"time":"..."}` |
+| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `"storage":"redis"` و `"persistent":true` و `"ownerFromEnv":true` |
 | التخزين بقى Redis | افتح `https://<app>.vercel.app/api/bootstrap` | جوّه `settings`: `"storage":"redis"` و `"realtime":false` |
+| الإعداد مكتمل | لوحة الإدارة → تبويب **🛠️ النظام** | ✅ جنب كل متغير إجباري + زمن الرد من Upstash |
+| قبل النشر (من جهازك) | `npm run check:env -- --vercel` | كل المتغيرات الإجبارية ✅ + `PONG` من Upstash |
 | الواجهة | افتح الدومين | المنيو بـ ٥٠ صنف بالصور |
 | الدخول | `aliielramal@gmail.com` وكلمة السر التي ضبطتها بشكل خاص | لوحة الإدارة تفتح |
 
@@ -174,6 +181,18 @@ git push -u origin main
 > وبتظهر في اللوحة **مقنّعة** (آخر ٤ حروف) ومستحيل توصل لأي API للعميل.
 
 فيه نسخة جاهزة في الريبو: **[`.env.example`](.env.example)** — انسخها لـ `.env` للتشغيل المحلي.
+
+### ٣.٥) فحص الجاهزية بأمر واحد (قبل النشر وبعده)
+
+```bash
+npm run check:env              # الوضع الحالي (محلي)
+npm run check:env -- --vercel  # «اختبرني كأني على Vercel» قبل ما تنشر
+```
+
+بيطبع جدول بكل متغير (**ناقص / غلط / تمام**) من غير ما يكشف أي قيمة سرية، وبيعمل `PING` تجريبي
+حقيقي على Upstash ويقولك زمن الرد. الخروج بـ `exit 1` معناه لسه فيه حاجة ناقصة.
+
+وبعد النشر فيه تبويب **🛠️ النظام** في لوحة الإدارة (للمالك فقط) بيعرض نفس التقرير بزر «تحديث».
 
 ---
 
@@ -308,7 +327,7 @@ UPSTASH_REDIS_REST_TOKEN=x \
 VERCEL=1 ADMIN_PASSWORD=test-only-password npm start
 ```
 
-**أو الاختبارات الآلية (١٥ اختبار — بتعمل كل السيناريو لوحدها):**
+**أو الاختبارات الآلية (٢٣ اختبار — بتعمل كل السيناريو لوحدها):**
 
 ```bash
 npm run test:vercel
@@ -318,7 +337,9 @@ npm run test:vercel
 رفع الصور بيتخزّن في القاعدة وبيتقدم من `/api/img/:id` · SSE بيترفض (400) والواجهة بتتحوّل لـ polling.
 
 ```bash
-npm test              # ١٣٧ اختبار للوضع العادي: صلاحيات، طلبات، دفع، واتساب، إشعارات
+npm test              # ١٦٤ اختبار للوضع العادي: صلاحيات، طلبات، دفع، واتساب، إشعارات، إعداد النشر
+npm run test:real     # سيناريوهات التسجيل والطلبات الحقيقية على تخزين دائم
+npm run test:all      # الكل مع بعض
 ```
 
 ---
@@ -395,6 +416,10 @@ git push origin main       # Vercel/Render بيعملوا Deploy تلقائي
 | الصور مش بتتولّد | مفيش مفتاح AI | طبيعي: بيستخدم المكتبة المدمجة. حط `GEMINI_API_KEY` أو `OPENAI_API_KEY` |
 | الصور المرفوعة بتختفي (Render) | مفيش Disk ثابت | ضيف Disk أو حوّل التخزين لـ Redis |
 | زر «الدخول السريع» لسه موجود | تم تفعيل وضع التجربة المحلي صراحةً | ضيف `DEMO_LOGIN=0` واعمل Redeploy |
+| المتغيرات متظبطة بس مش بتأثر | نسيت Redeploy / محددة على Preview بس | فعّل **Production** واعمل **Redeploy** |
+| نسيت كلمة سر المالك | — | غيّر `ADMIN_PASSWORD` في الاستضافة → Redeploy (بيُعاد تطبيقه طالما الحساب متغيّرش من اللوحة)؛ بعد ما تتغيّر من **حسابي** استخدم «نسيت كلمة السر» |
+| مش عارف إيه الناقص بالظبط | — | `npm run check:env -- --vercel` أو تبويب 🛠️ النظام |
+| Vercel سوق Upstash حط أسماء `KV_*` | أسماء مختلفة عن اللي الكود بيقراه | ضيف `UPSTASH_REDIS_REST_URL` و `UPSTASH_REDIS_REST_TOKEN` بنفس القيم |
 | `Error: Cannot find module` على Vercel | حاولت تضيف dependencies | المشروع **بدون أي مكتبات خارجية** — شيل `npm install` من Build Command |
 
 **اللوجات:** Vercel → تبويب **Logs** · Render → **Logs** · VPS → `pm2 logs bbq`.
@@ -404,7 +429,8 @@ git push origin main       # Vercel/Render بيعملوا Deploy تلقائي
 
 ## ✅ تشيك ليست نهائي
 
-- [ ] `/api/health` بيرجّع `{"ok":true}`
+- [ ] `/api/health` بيرجّع `"storage":"redis"` و `"persistent":true` و `"ownerFromEnv":true`
+- [ ] تبويب **🛠️ النظام** كله ✅ (أو `npm run check:env -- --vercel` من جهازك)
 - [ ] `/api/bootstrap` بيوري `settings.storage = "redis"` (على Vercel) و`"realtime":false`
 - [ ] المنيو بيظهر بالصور، والطلب بيتم بنجاح ويوصل للوحة الإدارة
 - [ ] حساب المالك الخاص شغال، وخيارات التجربة مقفولة، وجُرّبت دورة الطلب من عميل إلى الإدارة ثم بعد إعادة تشغيل

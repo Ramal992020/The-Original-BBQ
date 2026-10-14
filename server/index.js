@@ -19,6 +19,7 @@ const ai = require('./ai');
 const whatsapp = require('./whatsapp');
 const payments = require('./payments');
 const imagekit = require('./imagekit');
+const deployEnv = require('./deploy-env');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -35,6 +36,10 @@ function ensureReady() {
     readyPromise = (async () => {
       await store.init();
       await store.transaction(() => seed.seed());
+      /* كلمات سر الطاقم من متغيرات البيئة (ADMIN_PASSWORD / SUPERVISOR_PASSWORD)
+         بتتوفّر مع كل إقلاع لحين ما يتغيّر من اللوحة — في ترانزاكشن منفصلة عشان
+         الكتابة في المتجر لازم تكون جوه store.transaction(). */
+      await store.transaction(() => deployEnv.syncCredentials());
       return true;
     })().catch((e) => {
       readyPromise = null;
@@ -45,6 +50,7 @@ function ensureReady() {
 }
 
 /* ============================== أدوات مساعدة ============================== */
+
 const isInside = (parent, child) => {
   const rel = path.relative(parent, child);
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -236,7 +242,21 @@ async function api(req, res, u, url) {
   const bad = (code, msg) => send(code, { error: msg });
 
   /* ------------------------------- عام ------------------------------- */
-  if (p === '/api/health') return send(200, { ok: true, storage: store.MODE, persistent: true, time: new Date().toISOString() });
+  if (p === '/api/health') {
+    /* فحص سريع للنشر — من غير أي قيمة سرية.
+       persistent = هل البيانات فعلاً بتعيش بعد إعادة التشغيل؟ */
+    const appUrl = String(process.env.APP_URL || '').trim();
+    return send(200, {
+      ok: true,
+      time: new Date().toISOString(),
+      serverless: SERVERLESS,
+      realtime: REALTIME,
+      storage: store.MODE,                                  // redis | file
+      persistent: store.MODE === 'redis' || !SERVERLESS,    // سيرفرلس من غير redis = مش دائم
+      appUrl: !!appUrl,
+      ownerFromEnv: !!String(process.env.ADMIN_PASSWORD || '').trim() || !!String(process.env.ADMIN_PASSWORD_HASH || '').trim(),
+    });
+  }
 
   if (p === '/api/bootstrap') {
     return send(200, {
@@ -945,6 +965,11 @@ async function api(req, res, u, url) {
     if (p === '/api/admin/outbox' && auth.isAdmin(u)) {
       return send(200, { messages: mail.outbox() });
     }
+    if (p === '/api/admin/system') {
+      if (!auth.isAdmin(u)) return bad(403, 'تقرير النظام لصاحب المطعم فقط');
+      /* تقرير متغيرات البيئة + اتصال تجريبي بـ Upstash (للأدمن فقط) */
+      return send(200, await deployEnv.report({ ping: true }));
+    }
   }
 
   return bad(404, 'راوت غير موجود');
@@ -1029,12 +1054,18 @@ async function handle(req, res) {
 const serverlessHandler = handle;
 const server = http.createServer(handle);
 if (require.main === module) {
-  ensureReady().then(() => server.listen(PORT, HOST, () => {
+  ensureReady().then(() => server.listen(PORT, HOST, async () => {
     console.log('');
     console.log('🔥 The Original BBQ — التسجيل والطلبات شغالين على تخزين دائم');
     console.log(`   افتح: http://localhost:${PORT}`);
     console.log(`   الإدارة: /#/admin · صاحب المطعم: ${auth.OWNER_EMAIL}`);
     console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis' : 'قرص السيرفر — يلزم قرص دائم على الاستضافة'}`);
+    if (process.env.APP_URL) console.log(`   APP_URL: ${process.env.APP_URL}`);
+    /* تنبيهات الإعداد — نفس اللي بيظهر في تبويب 🛠️ النظام بلوحة الإدارة */
+    const rep = await deployEnv.report({ ping: false });
+    for (const w of rep.warnings) console.log(`   ${w.level === 'danger' ? '🚨' : '⚠️ '} ${w.message}`);
+    if (rep.missing.length) console.log(`   🚨 متغيرات ناقصة: ${rep.missing.join('، ')}`);
+    if (rep.warnings.length || rep.missing.length) console.log('   الشرح: docs/VERCEL-UPSTASH.md');
     console.log('');
   })).catch((e) => {
     console.error('[startup]', e.message);

@@ -32,6 +32,10 @@ let BASE = '';
 let pass = 0, fail = 0;
 const results = [];
 
+/* حساب صاحب المطعم (ADMIN_EMAIL/ADMIN_PASSWORD) + الحسابات التجريبية (SEED_DEMO=1) */
+const OWNER_EMAIL = process.env.ADMIN_EMAIL;
+const OWNER_PW = process.env.ADMIN_PASSWORD;
+
 function check(name, cond, extra = '') {
   if (cond) { pass++; console.log('  PASS  ' + name); }
   else { fail++; console.log('  FAIL  ' + name + (extra ? '  → ' + extra : '')); }
@@ -79,6 +83,8 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   const badLogin = await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'wrong' } });
   check('كلمة سر غلط مرفوضة (401)', badLogin.status === 401);
+
+
 
   const newUser = await req('POST', '/api/auth/signup', { body: { name: 'مستخدم جديد', email: 'new@bbq.app', password: 'secret123', phone: '01099998888' } });
   check('تسجيل حساب جديد ينجح', newUser.status === 201);
@@ -574,6 +580,61 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   const trav = await fetch(BASE + '/%2e%2e%2fserver%2findex.js');
   const travBody = await trav.text();
   check('منع الوصول لملفات خارج public (path traversal)', (trav.status === 403 || trav.status === 404) && !travBody.includes('sessionUser'), 'status=' + trav.status);
+
+  /* ---------------------------- 14) النشر ومتغيرات البيئة ---------------------------- */
+  console.log('\n【 النشر: Upstash + ADMIN_PASSWORD 】');
+  const envMod = require('./deploy-env');
+
+  r = await req('GET', '/api/health');
+  check('‎/api/health بيقول نوع التخزين', r.status === 200 && typeof r.data.storage === 'string' && typeof r.data.persistent === 'boolean');
+  check('‎/api/health بيقول إن حساب صاحب المطعم من البيئة ولا لأ', typeof r.data.ownerFromEnv === 'boolean');
+  check('‎/api/health بيحسب persistent صح (سيرفر عادي = دائم)', r.data.persistent === true);
+
+  /* حساب عميل جديد مخصوص للاختبار (جلسات الحسابات القديمة ممكن تكون اتقفلت من اختبارات الاستعادة) */
+  const probe = (await req('POST', '/api/auth/signup', { body: { name: 'عميل فحص', email: 'probe@bbq.app', password: 'probe12345' } })).data;
+  let sys = await req('GET', '/api/admin/system');
+  check('تقرير النظام محجوب عن غير المسجّلين (401)', sys.status === 401);
+  sys = await req('GET', '/api/admin/system', { token: probe.token });
+  check('تقرير النظام مرفوض للعميل (403)', sys.status === 403, 'status=' + sys.status);
+  sys = await req('GET', '/api/admin/system', { token: sup.token });
+  check('تقرير النظام مرفوض للمشرف (403)', sys.status === 403);
+  sys = await req('GET', '/api/admin/system', { token: admin.token });
+  check('تقرير النظام متاح للأدمن (200)', sys.status === 200 && !!sys.data.vars);
+  check('التقرير فيه حالة المتغيرات الإجبارية', ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'APP_URL', 'ADMIN_PASSWORD']
+    .every((k) => sys.data.vars.some((v) => v.key === k)));
+  check('التقرير بيعرف إن صاحب المطعم متجهّز من البيئة', sys.data.credentials.ownerFromEnv === true);
+  check('التقرير مش بيكشف القيم السرية', sys.data.vars.filter((v) => ['UPSTASH_REDIS_REST_TOKEN', 'ADMIN_PASSWORD'].includes(v.key))
+    .every((v) => !v.value || v.value.startsWith('••')));
+
+  /* صاحب المطعم: حسابه بيتربط بـ ADMIN_EMAIL + ADMIN_PASSWORD من البيئة */
+  const owner = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } });
+  check('الدخول بحساب صاحب المطعم من البيئة', owner.status === 200 && owner.data.user.role === 'admin' && owner.data.user.isOwner === true);
+  const wrongOwner = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: 'not-the-password' } });
+  check('كلمة سر غلط لصاحب المطعم مرفوضة (401)', wrongOwner.status === 401);
+  check('التقرير حسّ إن صاحب المطعم من البيئة', (await envMod.report({ ping: false })).credentials.ownerFromEnv === true);
+
+  /* البيئة بتوّفّر كلمة السر لحين ما صاحبها يغيّرها — وبعد كده مش بتتلمس */
+  const store = require('./store');
+  const auth = require('./auth');
+  await store.transaction(async () => {
+    const user = auth.byEmail(OWNER_EMAIL);
+    process.env.ADMIN_PASSWORD = 'Rotated#2026';
+    envMod.syncCredentials({ log: false });
+    const rotated = auth.byEmail(OWNER_EMAIL);
+    check('تغيير ADMIN_PASSWORD بينعكس على الحساب (قبل أي تغيير من اللوحة)', auth.verifyPassword('Rotated#2026', rotated.salt, rotated.hash));
+    process.env.ADMIN_PASSWORD = OWNER_PW;
+    envMod.syncCredentials({ log: false });
+    check('العملية idempotent (مش بتكتب كل مرة)', auth.verifyPassword(OWNER_PW, auth.byEmail(OWNER_EMAIL).salt, auth.byEmail(OWNER_EMAIL).hash));
+  });
+  const rotatedLogin = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } });
+  check('الدخول لسه شغال بعد التدوير ورجوع المتغير', rotatedLogin.status === 200);
+
+  /* صاحب المطعم غيّر كلمة السر من اللوحة → البيئة مش بتلمسها تاني */
+  await store.transaction(() => { auth.changePassword(auth.byEmail(OWNER_EMAIL), 'Owner#Changed2026'); });
+  await store.transaction(() => envMod.syncCredentials({ log: false }));
+  const keptPassword = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: 'Owner#Changed2026' } });
+  check('كلمة سر صاحب المطعم اللي غيّرها من اللوحة مش بتترجّع', keptPassword.status === 200);
+  await store.transaction(() => { auth.changePassword(auth.byEmail(OWNER_EMAIL), OWNER_PW); });
 
   /* ---------------------------- النتيجة ---------------------------- */
   console.log('\n' + '─'.repeat(58));

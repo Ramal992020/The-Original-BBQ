@@ -29,6 +29,7 @@ function execute(command) {
     case 'PEXPIRE':
       if (get(key) === null) return { result: 0 };
       expires.set(key, Date.now() + Number(value)); return { result: 1 };
+    case 'PING': return { result: 'PONG' };   /* used by tools/check-env.js to verify the URL/token */
     case 'KEYS': return { result: [...store.keys()].filter((k) => get(k) !== null) };
     case 'FLUSHALL': store.clear(); expires.clear(); return { result: 'OK' };
     case 'EVAL': {

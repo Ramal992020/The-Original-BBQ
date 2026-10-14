@@ -177,6 +177,8 @@ original-bbq-app/
 │   ├── auth.js       الحسابات، تشفير كلمات السر (scrypt+Salt)، الجلسات، الأدوار
 │   ├── store.js      قاعدة البيانات (snapshot ذري على القرص أو Upstash Redis)
 │   ├── seed.js       المنيو والإعدادات + تجهيز المالك من إعداد خاص
+│   ├── env.js        تحميل .env المحلي (الاستضافة ليها الأولوية)
+│   ├── deploy-env.js تقرير جاهزية النشر + كلمات سر الطاقم من البيئة
 │   ├── ai.js         مولّد صور الطعام (Gemini/OpenAI لو فيه مفتاح، وإلا المكتبة)
 │   ├── imagekit.js   رفع الصور وضغطها (multipart)
 │   ├── whatsapp.js   إشعارات واتساب: ٧ مزوّدين + القوالب + السجل + تطبيع الأرقام
@@ -196,11 +198,12 @@ original-bbq-app/
 ├── uploads/          الصور اللي ترفعها من لوحة الإدارة (وضع السيرفر العادي — في .gitignore)
 ├── backups/          النسخ الاحتياطية (npm run reset — في .gitignore)
 ├── api/[...route].js نقطة دخول Vercel (سيرفرلس)
-├── tools/            أدوات مساعدة (محاكي Upstash للتجربة المحلية)
+├── tools/            أدوات مساعدة (محاكي Upstash + فحص جاهزية النشر)
 ├── vercel.json       إعدادات Vercel (جاهزة)
 ├── .env.example      كل متغيرات البيئة موثّقة (انسخه لـ .env للتشغيل المحلي)
 ├── .gitignore        بيمنع رفع بياناتك الحقيقية وأسرارك على GitHub
-└── DEPLOY.md         دليل النشر خطوة بخطوة (GitHub → Vercel / Render / VPS)
+├── DEPLOY.md         دليل النشر خطوة بخطوة (GitHub → Vercel / Render / VPS)
+└── docs/             docs/VERCEL-UPSTASH.md — ربط Upstash + متغيرات Vercel بالتفصيل
 ```
 
 **أوامر مفيدة:**
@@ -292,14 +295,19 @@ DEMO_LOGIN=0 npm start
 2. اعمل قاعدة **Upstash Redis** مجانية وخُد `REST URL` + `TOKEN`.
 3. على [vercel.com/new](https://vercel.com/new) اعمل Import للريبو وضيف متغيرات البيئة:
    `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN` · `ADMIN_EMAIL` · `ADMIN_PASSWORD` · `APP_URL` · `DEMO_LOGIN=0`
-4. Deploy ✅
+4. **Redeploy** بعد أي تغيير في المتغيرات (مش بتتطبّق على deploy قديم).
+5. اتأكد: `/api/health` → `"storage":"redis"` و`"persistent":true` و`"ownerFromEnv":true`،
+   أو تبويب **🛠️ النظام** في لوحة الإدارة — أو `npm run check:env -- --vercel` من جهازك قبل النشر.
+
+> 📌 **الدليل المصغّر بالتفصيل (من إنشاء قاعدة Upstash لحد Redeploy + جدول بكل غلطة شايعة):**
+> [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md)
 
 **عايز تجرّبه محليًا في وضع Vercel؟**
 ```bash
 npm run fake-redis                              # تيرمنال ١ (محاكي Upstash)
 STORAGE=redis UPSTASH_REDIS_REST_URL=http://127.0.0.1:4599 \
   UPSTASH_REDIS_REST_TOKEN=x VERCEL=1 ADMIN_PASSWORD=test-only-password npm start # تيرمنال ٢
-npm run test:vercel                             # ١٥ اختبار آلي لوضع Vercel
+npm run test:vercel                             # ٢٣ اختبار آلي لوضع Vercel
 ```
 
 > ⚖️ **أي واحد تختار؟** لو عايز أسهل إعداد → Vercel + Upstash. لو عايز اللحظية القصوى (الطلب يظهر للكاشير
