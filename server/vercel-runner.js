@@ -10,6 +10,8 @@ const { ensureReady, serverlessHandler } = require('./index');
 const MODE = process.argv[2] || 'first';
 const PORT = Number(process.env.PORT || 3199);
 const BASE = 'http://127.0.0.1:' + PORT;
+/* لو ADMIN_PASSWORD مظبوط في البيئة، السيرفر بيخلّي كلمة سر الأدمن هي دي */
+const ADMIN_PW = String(process.env.ADMIN_PASSWORD || '').trim() || 'admin123';
 
 const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
   const h = { ...headers };
@@ -26,10 +28,23 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
   const server = http.createServer(serverlessHandler);
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
 
-  const admin = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).d;
+  const admin = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).d;
   const out = {};
 
-  if (MODE === 'first') {
+  if (MODE === 'env-report') {
+    /* تقرير متغيرات البيئة + اتصال Upstash (زي tools/check-env.js بس جوه وضع Vercel) */
+    const rep = await require('./env').report({ ping: true });
+    out.storage = rep.storage;
+    out.adminFromEnv = rep.credentials.adminFromEnv;
+    out.appUrl = rep.appUrl;
+    out.ping = !!(rep.redis && rep.redis.ok);
+    out.pingError = (rep.redis && rep.redis.error) || '';
+    out.loginWithEnvPassword = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).status;
+    out.loginWithDefault = ADMIN_PW === 'admin123' ? 401
+      : (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).status;
+    const h = await J('GET', '/api/health');
+    out.persistent = h.d.persistent;
+  } else if (MODE === 'first') {
     const boot = await J('GET', '/api/bootstrap');
     out.storage = boot.d.settings.storage;
     out.realtime = boot.d.settings.realtime;
@@ -61,7 +76,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
     out.imgStatus = img.status;
     out.imgBytes = (await img.arrayBuffer()).byteLength;
   } else {
-    out.login = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).status;
+    out.login = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).status;
     const ords = await J('GET', '/api/admin/orders', { token: admin.token });
     out.orders = ords.d.orders.length;
     out.orderId = ords.d.orders[0] && ords.d.orders[0].id;

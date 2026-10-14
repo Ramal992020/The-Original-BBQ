@@ -10,6 +10,7 @@
     "dev": "node --watch server/index.js",
     "test": "node server/test.js",
     "test:vercel": "node server/test-vercel.js",
+    "check:env": "node tools/check-env.js",
     "fake-redis": "node tools/fake-upstash.js",
     "reset": "node server/reset.js",
     "test:ui": "node --test server/test-ui.js"

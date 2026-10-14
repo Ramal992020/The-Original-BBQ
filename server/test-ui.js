@@ -327,3 +327,38 @@ test('admin forms are rebound after soft refresh rather than submitting native G
   assert.match(ui.elements.get('#adminBody').innerHTML, /name="spicy"/);
   assert.match(ui.elements.get('#adminBody').innerHTML, /name="available"/);
 });
+
+test('the deployment-readiness tab is admin-only', () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.evaluate("ME = {role:'customer'}");
+  assert.doesNotMatch(ui.evaluate("adminTabsHTML('dash')"), /data-id="system"/);
+  assert.match(ui.evaluate("adminBodyFor('system')"), /للأدمن فقط/);
+  ui.evaluate("ME = {role:'admin'}");
+  assert.match(ui.evaluate("adminTabsHTML('dash')"), /data-id="system"/);
+  assert.doesNotMatch(ui.evaluate("adminBodyFor('system')"), /للأدمن فقط/);
+});
+
+test('the system report shows masked values and never leaks secrets', () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.evaluate(`ME = {role:'admin'}; AD.system = {
+    serverless: true, storage: 'redis', redis: { ok: true, ms: 12 },
+    credentials: { adminFromEnv: true, adminEmail: 'admin@bbq.app', note: 'note' },
+    warnings: [{ level: 'danger', message: 'warning text' }],
+    vars: [
+      { key: 'UPSTASH_REDIS_REST_TOKEN', label: 'توكن', hint: 'hint', level: 'required', active: true, present: true, value: '••••••wxyz', status: 'ok' },
+      { key: 'APP_URL', label: 'الرابط', hint: 'hint', level: 'required', active: true, present: true, value: 'https://bbq.vercel.app', status: 'ok' },
+      { key: 'ADMIN_PASSWORD', label: 'السر', hint: 'hint', level: 'required', active: true, present: true, value: '••••••2026', status: 'ok' },
+      { key: 'DEMO_LOGIN', label: 'تجريبي', hint: 'hint', level: 'recommended', active: true, present: false, value: '', status: 'missing' },
+    ] }`);
+  const html = ui.evaluate('adminSystemHTML()');
+  assert.match(html, /UPSTASH_REDIS_REST_TOKEN/);
+  assert.match(html, /ADMIN_PASSWORD/);
+  assert.match(html, /••••••2026/);               // masked, not the raw password
+  assert.doesNotMatch(html, /my-real-password/);
+  assert.match(html, /data-act="system-refresh"/); // refreshable after a redeploy
+  assert.match(html, /Redeploy/);                  // tells the owner the next action
+  assert.match(html, /warning text/);              // surfaces the danger warning
+  assert.match(html, /hint/);                      // and how to fix what is missing
+  ui.evaluate('AD.system = null');
+  assert.match(ui.evaluate('adminSystemHTML()'), /⏳/);   // loading state, not a crash
+});

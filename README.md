@@ -178,9 +178,10 @@ original-bbq-app/
 │   ├── whatsapp.js   إشعارات واتساب: ٧ مزوّدين + القوالب + السجل + تطبيع الأرقام
 │   ├── payments.js   الدفع: Stripe + Paymob + محاكاة + التحقق من التوقيعات (HMAC)
 │   ├── mail.js       الإيميلات (console افتراضيًا — Resend لو حطيت مفتاح)
+│   ├── env.js        فحص متغيرات البيئة + فرض كلمة سر الأدمن من ADMIN_PASSWORD
 │   ├── test.js       اختبارات الـAPI والصلاحيات والدفع والواتساب (npm test)
 │   ├── test-ui.js    اختبارات الثيم والتوجيه والمنيو والسلة (npm run test:ui)
-│   ├── test-vercel.js  ١٥ اختبار لوضع Vercel/Redis (npm run test:vercel)
+│   ├── test-vercel.js  ٢١ اختبار لوضع Vercel/Redis (npm run test:vercel)
 │   └── data/         بياناتك الحقيقية (بتتولد أول تشغيل — ⚠️ في .gitignore، خُد منها نسخة احتياطية)
 ├── public/
 │   ├── index.html · styles.css · app.js    واجهة العميل + لوحة الإدارة
@@ -191,11 +192,12 @@ original-bbq-app/
 ├── uploads/          الصور اللي ترفعها من لوحة الإدارة (وضع السيرفر العادي — في .gitignore)
 ├── backups/          النسخ الاحتياطية (npm run reset — في .gitignore)
 ├── api/[...route].js نقطة دخول Vercel (سيرفرلس)
-├── tools/            أدوات مساعدة (محاكي Upstash للتجربة المحلية)
+├── tools/            أدوات مساعدة (محاكي Upstash + فحص جاهزية النشر)
 ├── vercel.json       إعدادات Vercel (جاهزة)
 ├── .env.example      كل متغيرات البيئة موثّقة (انسخه لـ .env للتشغيل المحلي)
 ├── .gitignore        بيمنع رفع بياناتك الحقيقية وأسرارك على GitHub
-└── DEPLOY.md         دليل النشر خطوة بخطوة (GitHub → Vercel / Render / VPS)
+├── DEPLOY.md         دليل النشر خطوة بخطوة (GitHub → Vercel / Render / VPS)
+└── docs/             docs/VERCEL-UPSTASH.md — ربط Upstash + متغيرات Vercel بالصور
 ```
 
 **أوامر مفيدة:**
@@ -207,6 +209,7 @@ npm run reset        # نسخة احتياطية + تصفير البيانات
 npm run test:ui      # منطق الواجهة (بدون مكتبات إضافية)
 npm run test:vercel  # اختبار وضع Vercel (سيرفرلس + Redis)
 npm run fake-redis   # محاكي Upstash للتجربة المحلية
+npm run check:env -- --vercel   # ⭐ فحص جاهزية النشر (إيه الناقص؟ + PING على Upstash)
 ```
 
 ---
@@ -222,6 +225,7 @@ npm run fake-redis   # محاكي Upstash للتجربة المحلية
    - غيّر `adminPin`… قصدي كلمات سر الحسابات الجاهزة أو اعمل حسابات جديدة وشيل القديمة.
    - شغّل بـ `DEMO_LOGIN=0` عشان تقفل الدخول السريع.
    - حط `APP_URL=https://yourdomain.com` عشان روابط استعادة كلمة السر تطلع صح.
+   - حط `ADMIN_PASSWORD=...` عشان حساب الأدمن يبقى بكلمة سر من البيئة (مش `admin123`).
    - **HTTPS مهم** — أي استضافة من دول بيدّيه تلقائيًا.
 
 ---
@@ -260,6 +264,8 @@ DEMO_LOGIN=0 npm start
 - ✅ **تأكيد الدفع بتوقيع موقّع** (Stripe signature / Paymob HMAC) — أي Webhook بتوقيع غلط بيترفض ومش بيغيّر أي حالة (متحقَّق في الاختبارات).
 - ✅ **صفحة الدفع التجريبية محمية بتوكن** لكل طلب — مفيش حد يقدر يعلّم طلب حد تاني كمدفوع.
 - ✅ إرسال واتساب بيحترم موافقة العميل، وكل رسالة بتتسجل (مين، إمتى، ونجحت ولا لأ).
+- ✅ **`ADMIN_PASSWORD`** (اختياري بس يُفضّل على الإنتاج): كلمة سر الأدمن بتيجي من متغيرات البيئة
+  وبيترجّع لها الحساب مع كل إقلاع — كده مفيش `admin123` على الإنتاج، ولو نسيتها تغيّر المتغير وتعمل Redeploy.
 - ⚠️ خُد **نسخة احتياطية** دوريًا: زر «نسخة احتياطية» في الإعدادات، أو انسخ مجلد `server/data`.
 
 ---
@@ -279,15 +285,19 @@ DEMO_LOGIN=0 npm start
 1. ارفع الريبو على GitHub.
 2. اعمل قاعدة **Upstash Redis** مجانية وخُد `REST URL` + `TOKEN`.
 3. على [vercel.com/new](https://vercel.com/new) اعمل Import للريبو وضيف متغيرات البيئة:
-   `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN` · `APP_URL` · `DEMO_LOGIN=0`
-4. Deploy ✅
+   `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN` · `APP_URL` · `ADMIN_PASSWORD` · `DEMO_LOGIN=0`
+4. **Redeploy** (المتغيرات مش بتتطبّق على deploy قديم).
+5. اتأكد: `/api/health` → `"storage":"redis"` و`"persistent":true`، أو تبويب **🛠️ النظام** في لوحة الإدارة.
+
+> 📌 **دليل مصغّر بالصور للمتغيرات الأربعة:** [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md)
+> (from إنشاء قاعدة Upstash لحد Redeploy والتأكد، وحلّ كل غلطة شايعة).
 
 **عايز تجرّبه محليًا في وضع Vercel؟**
 ```bash
 npm run fake-redis                              # تيرمنال ١ (محاكي Upstash)
 STORAGE=redis UPSTASH_REDIS_REST_URL=http://127.0.0.1:4599 \
   UPSTASH_REDIS_REST_TOKEN=x VERCEL=1 npm start # تيرمنال ٢
-npm run test:vercel                             # ١٥ اختبار آلي لوضع Vercel
+npm run test:vercel                             # ٢١ اختبار آلي لوضع Vercel
 ```
 
 > ⚖️ **أي واحد تختار؟** لو عايز أسهل إعداد → Vercel + Upstash. لو عايز اللحظية القصوى (الطلب يظهر للكاشير

@@ -13,6 +13,9 @@
 >
 > **الاختيار الأوتوماتيك:** لو `UPSTASH_REDIS_REST_URL` موجود → سيرفرلس. غير كده → ملفات.
 > (وتقدر تجبره بـ `STORAGE=redis` أو `STORAGE=file`.)
+>
+> 📌 **دليل مصغّر لربط Upstash + متغيرات Vercel (`UPSTASH_REDIS_REST_URL` و `UPSTASH_REDIS_REST_TOKEN`
+> و `ADMIN_PASSWORD` و `APP_URL`) خطوة بخطوة: [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md)**
 
 ---
 
@@ -20,7 +23,7 @@
 
 1. [قبل ما تبدأ](#١-قبل-ما-تبدأ)
 2. [الطريق أ: Vercel + Upstash (المُوصى به)](#٢-الطريق-أ-vercel--upstash)
-3. [جدول متغيرات البيئة الكامل](#٣-جدول-متغيرات-البيئة-الكامل)
+3. [جدول متغيرات البيئة الكامل](#٣-جدول-متغيرات-البيئة-الكامل) + [فحص الجاهزية بأمر واحد](#٣٥-فحص-الجاهزية-بأمر-واحد)
 4. [أول ١٠ دقايق بعد النشر (مهم جدًا)](#٤-أول-١٠-دقايق-بعد-النشر-مهم-جدًا)
 5. [الطريق ب: Render (سيرفر عادي + لحظية SSE)](#٥-الطريق-ب-render)
 6. [الطريق ج: VPS / أي سيرفر Node](#٦-الطريق-ج-vps--أي-سيرفر-node)
@@ -47,7 +50,7 @@
 ```bash
 npm install        # اختيارية — المشروع بيشتغل من غير أي مكتبات
 npm start          # افتح http://localhost:3000
-npm test           # لازم يطلع: 🎉 كل الاختبارات نجحت (137)
+npm test           # لازم يطلع: 🎉 كل الاختبارات نجحت (160)
 ```
 
 حسابات التجربة الجاهزة: `admin@bbq.app / admin123` · `supervisor@bbq.app / super123` · `demo@bbq.app / demo123`
@@ -108,7 +111,11 @@ git push -u origin main
    | `UPSTASH_REDIS_REST_URL` | `https://eu1-xxxxx-xxxxx.upstash.io` |
    | `UPSTASH_REDIS_REST_TOKEN` | التوكن اللي نسخته |
    | `APP_URL` | `https://<project>.vercel.app` (من غير `/` في الآخر) |
+   | `ADMIN_PASSWORD` | كلمة سر قوية (٨ حروف على الأقل) — مش `admin123` |
    | `DEMO_LOGIN` | `0` |
+
+   > المتغيرات الأربعة دول + `DEMO_LOGIN` ليهم [دليل مصغّر مستقل](docs/VERCEL-UPSTASH.md)
+   > فيه صور للخطوات ونسخ/لصق جاهز وطريقة التأكد (ومنها `npm run check:env -- --vercel`).
 
 5. **Deploy** ✅ — هياخد أقل من دقيقة.
 
@@ -119,10 +126,15 @@ git push -u origin main
 
 | الفحص | إزاي | المفروض |
 |---|---|---|
-| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `{"ok":true,"time":"..."}` |
+| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `{"ok":true,"storage":"redis","persistent":true,"adminPasswordFromEnv":true}` |
 | التخزين بقى Redis | افتح `https://<app>.vercel.app/api/bootstrap` | جوّه `settings`: `"storage":"redis"` و `"realtime":false` |
+| الإعداد مكتمل | لوحة الإدارة → تبويب **🛠️ النظام** | ✅ جنب كل متغير إجباري + زمن الرد من Upstash |
 | الواجهة | افتح الدومين | المنيو بـ ٥٠ صنف بالصور |
-| الدخول | `admin@bbq.app / admin123` | لوحة الإدارة تفتح |
+| الدخول | `admin@bbq.app` + كلمة سر `ADMIN_PASSWORD` | لوحة الإدارة تفتح |
+
+> لو `ADMIN_PASSWORD` مش متظبط، التطبيق هيسيب الحساب على `admin123` وحيwarnك في اللوجات وفي تبويب النظام.
+> ولو `ADMIN_PASSWORD` متظبط → **كلمة سر الأدمن بترجع لقيمته مع كل Redeploy** (ده مقصود: بيخليك
+> تسترجع الدخول لو نسيتها — شوف [دليل Upstash](docs/VERCEL-UPSTASH.md#٦-كلمة-سر-الأدمن-إزاي-تشتغل)).
 
 > لو `"storage":"file"` → يبقى متغير `UPSTASH_REDIS_REST_URL` مش متسجل صح، والبيانات **هتضيع مع كل Deploy**.
 > صلّحه فورًا من **Settings → Environment Variables** واعمل **Redeploy**.
@@ -144,7 +156,10 @@ git push -u origin main
 | `UPSTASH_REDIS_REST_URL` | ✅ على Vercel | Vercel | رابط REST (يبدأ بـ `https://`) للتخزين السحابي |
 | `UPSTASH_REDIS_REST_TOKEN` | ✅ معاه | Vercel | توكن Upstash |
 | `APP_URL` | ✅ للإنتاج | Vercel / Render | الدومين النهائي — روابط الدفع + واتساب + استعادة كلمة السر |
+| `ADMIN_PASSWORD` | ✅ على Vercel | Vercel | كلمة سر الأدمن (٨ حروف على الأقل) — بيترجّع لها الحساب مع كل Redeploy |
 | `DEMO_LOGIN=0` | ✅ للإنتاج | Vercel / Render | يقفل «الدخول السريع» للحساب التجريبي |
+| `ADMIN_EMAIL` | ❌ | أي وضع | إيميل الأدمن (الافتراضي `admin@bbq.app`) |
+| `SUPERVISOR_PASSWORD` | ❌ | أي وضع | نفس فكرة `ADMIN_PASSWORD` لحساب `supervisor@bbq.app` |
 | `STORAGE` | ❌ | أي وضع | `redis` أو `file` — لتجاوز الاختيار التلقائي |
 | `REDIS_PREFIX` | ❌ | Redis | بادئة المفاتيح (الافتراضي `bbq:`) — لو أكتر من تطبيق على نفس القاعدة |
 | `PORT` | ❌ | سيرفر عادي | البورت (الافتراضي `3000`) — على Vercel/Render بيتحدد لوحده |
@@ -166,11 +181,24 @@ git push -u origin main
 
 فيه نسخة جاهزة في الريبو: **[`.env.example`](.env.example)** — انسخها لـ `.env` للتشغيل المحلي.
 
+### ٣.٥) فحص الجاهزية بأمر واحد
+
+```bash
+npm run check:env              # الوضع الحالي (محلي)
+npm run check:env -- --vercel  # «اختبرني كأني على Vercel» قبل ما تنشر
+```
+
+بيطبع جدول بكل متغير (ناقص / غلط / تمام) **من غير ما يكشف أي قيمة سرية**، وبيعمل `PING` تجريبي
+حقيقي على Upstash ويقولك زمن الرد. الخروج بـ `exit 1` معناه لسه فيه حاجة ناقصة.
+
+وكمان فيه تبويب **🛠️ النظام** في لوحة الإدارة (للأدمن بس) بيعرض نفس التقرير بعد النشر.
+
 ---
 
 ## ٤) أول ١٠ دقايق بعد النشر (مهم جدًا)
 
-- [ ] **غيّر كلمة سر الأدمن** — سجّل دخول بـ `admin@bbq.app / admin123` → **الحساب** → كلمة سر جديدة قوية.
+- [ ] **كلمة سر الأدمن** — لو حطيت `ADMIN_PASSWORD` في متغيرات البيئة يبقى خلصت (وهي اللي بتكسب مع كل Redeploy).
+      غير كده: سجّل دخول بـ `admin@bbq.app / admin123` → **الحساب** → كلمة سر جديدة قوية.
 - [ ] **غيّر كلمة سر المشرف** `supervisor@bbq.app` أو عطّل الحساب لو مش محتاجه.
 - [ ] **احذف/عطّل الحساب التجريبي** `demo@bbq.app` من صفحة **المستخدمون**، وتأكد إن `DEMO_LOGIN=0` متظبط.
 - [ ] **بيانات المطعم** → **الإعدادات**: الاسم، الرقم، واتساب، العنوان، مواعيد الشغل، رسوم التوصيل، أقل طلب.
@@ -296,7 +324,7 @@ UPSTASH_REDIS_REST_TOKEN=x \
 VERCEL=1 npm start
 ```
 
-**أو الاختبارات الآلية (١٥ اختبار — بتعمل كل السيناريو لوحدها):**
+**أو الاختبارات الآلية (٢١ اختبار — بتعمل كل السيناريو لوحدها):**
 
 ```bash
 npm run test:vercel
@@ -382,6 +410,10 @@ git push origin main       # Vercel/Render بيعملوا Deploy تلقائي
 | الصور مش بتتولّد | مفيش مفتاح AI | طبيعي: بيستخدم المكتبة المدمجة. حط `GEMINI_API_KEY` أو `OPENAI_API_KEY` |
 | الصور المرفوعة بتختفي (Render) | مفيش Disk ثابت | ضيف Disk أو حوّل التخزين لـ Redis |
 | زر «الدخول السريع» لسه موجود | `DEMO_LOGIN` مش `0` | ضيف `DEMO_LOGIN=0` واعمل Redeploy |
+| `admin123` لسه شغال | `ADMIN_PASSWORD` مش متظبط أو نسيت Redeploy | ضيف `ADMIN_PASSWORD` → **Redeploy** → ادخل بالجديدة |
+| نسيت كلمة سر الأدمن | — | غيّر `ADMIN_PASSWORD` في Vercel → Redeploy → ادخل بالقيمة الجديدة |
+| المتغيرات متظبطه بس مش بتأثر | نسيت Redeploy / محددة على Preview بس | فعّل **Production** واعمل **Redeploy** |
+| مش عارف إيه الناقص بالظبط | — | `npm run check:env -- --vercel` (أو تبويب 🛠️ النظام بعد النشر) |
 | `Error: Cannot find module` على Vercel | حاولت تضيف dependencies | المشروع **بدون أي مكتبات خارجية** — شيل `npm install` من Build Command |
 
 **اللوجات:** Vercel → تبويب **Logs** · Render → **Logs** · VPS → `pm2 logs bbq`.
@@ -391,8 +423,9 @@ git push origin main       # Vercel/Render بيعملوا Deploy تلقائي
 
 ## ✅ تشيك ليست نهائي
 
-- [ ] `/api/health` بيرجّع `{"ok":true}`
+- [ ] `/api/health` بيرجّع `{"ok":true,"storage":"redis","persistent":true,"adminPasswordFromEnv":true}`
 - [ ] `/api/bootstrap` بيوري `settings.storage = "redis"` (على Vercel) و`"realtime":false`
+- [ ] تبويب **🛠️ النظام** في لوحة الإدارة كله ✅ (أو `npm run check:env -- --vercel` من جهازك)
 - [ ] المنيو بيظهر بالصور، والطلب بيتم بنجاح ويوصل للوحة الإدارة
 - [ ] كلمة سر الأدمن والمشرف اتغيّرت، و`DEMO_LOGIN=0`
 - [ ] `APP_URL` = الدومين النهائي (ورابط الدفع/واتساب بيفتح صح)

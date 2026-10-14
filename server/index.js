@@ -17,6 +17,7 @@ const ai = require('./ai');
 const whatsapp = require('./whatsapp');
 const payments = require('./payments');
 const imagekit = require('./imagekit');
+const env = require('./env');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -33,6 +34,9 @@ function ensureReady() {
     readyPromise = (async () => {
       await store.init();
       seed.seed();
+      /* متغيرات البيئة بتكسب: لو ADMIN_PASSWORD / SUPERVISOR_PASSWORD متظبطين،
+         كلمات السر بتتطبّق مع كل إقلاع (cold start على Vercel = كل Deploy). */
+      env.enforceCredentials();
       await store.idle();
       return true;
     })().catch((e) => {
@@ -187,7 +191,21 @@ async function api(req, res, u, url) {
   const bad = (code, msg) => send(code, { error: msg });
 
   /* ------------------------------- عام ------------------------------- */
-  if (p === '/api/health') return send(200, { ok: true, time: new Date().toISOString() });
+  if (p === '/api/health') {
+    /* فحص سريع للنشر — من غير أي قيمة سرية */
+    const appUrl = String(process.env.APP_URL || '').trim();
+    return send(200, {
+      ok: true,
+      time: new Date().toISOString(),
+      serverless: SERVERLESS,
+      realtime: REALTIME,
+      storage: store.MODE,                                  // redis = تخزين دائم
+      persistent: store.MODE === 'redis' || !SERVERLESS,     // false = هتضيع البيانات مع كل Deploy
+      appUrl: !!appUrl,
+      // adminPassword: هل كلمة سر الأدمن جاية من البيئة (مش admin123)
+      adminPasswordFromEnv: !!String(process.env.ADMIN_PASSWORD || '').trim(),
+    });
+  }
 
   if (p === '/api/bootstrap') {
     return send(200, {
@@ -863,6 +881,11 @@ async function api(req, res, u, url) {
     if (p === '/api/admin/outbox' && auth.isAdmin(u)) {
       return send(200, { messages: mail.outbox() });
     }
+    if (p === '/api/admin/system') {
+      if (!auth.isAdmin(u)) return bad(403, 'تقرير النظام للأدمن فقط');
+      /* تقرير متغيرات البيئة + اتصال تجريبي بـ Upstash (للأدمن فقط) */
+      return send(200, await env.report({ ping: true }));
+    }
   }
 
   return bad(404, 'راوت غير موجود');
@@ -950,14 +973,20 @@ async function serverlessHandler(req, res) {
 const server = http.createServer(handle);
 
 if (require.main === module) {
-  ensureReady().then(() => server.listen(PORT, HOST, () => {
+  ensureReady().then(() => server.listen(PORT, HOST, async () => {
     console.log('');
     console.log('🔥 The Original BBQ — التطبيق شغال');
     console.log(`   افتح:   http://localhost:${PORT}`);
     console.log(`   الإدارة: http://localhost:${PORT}/#/admin`);
-    console.log('   حسابات: admin@bbq.app/admin123 · supervisor@bbq.app/super123 · demo@bbq.app/demo123');
+    const adminPw = String(process.env.ADMIN_PASSWORD || '').trim();
+    console.log(`   حسابات: ${(process.env.ADMIN_EMAIL || 'admin@bbq.app')}/${adminPw ? '•••• (من ADMIN_PASSWORD)' : 'admin123'} · supervisor@bbq.app/super123 · demo@bbq.app/demo123`);
     console.log(`   مولّد الصور: ${process.env.GEMINI_API_KEY ? 'Gemini ✔' : process.env.OPENAI_API_KEY ? 'OpenAI ✔' : 'مكتبة مدمجة (بدون مفتاح API)'}`);
-    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis' : 'ملفات محلية'}`);
+    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis (دائم)' : 'ملفات محلية'}`);
+    if (process.env.APP_URL) console.log(`   APP_URL: ${process.env.APP_URL}`);
+    /* تنبيهات الإعداد — نفس اللي بيظهر في تبويب 🛠️ النظام بلوحة الإدارة */
+    const rep = await env.report({ ping: false });
+    for (const w of rep.warnings) console.log(`   ${w.level === 'danger' ? '🚨' : '⚠️ '} ${w.message}`);
+    if (rep.missing.length) console.log(`   🚨 متغيرات ناقصة: ${rep.missing.join('، ')}`);
     console.log('');
   }));
 }

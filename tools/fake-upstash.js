@@ -38,6 +38,7 @@ function createServer() {
         if (op === 'GET') return { result: store.has(key) ? store.get(key) : null };
         if (op === 'DEL') { store.delete(key); return { result: 1 }; }
         if (op === 'KEYS') return { result: [...store.keys()] };
+        if (op === 'PING') return { result: 'PONG' };          // لفحص الاتصال (tools/check-env.js)
         if (op === 'FLUSHALL') { store.clear(); return { result: 'OK' }; }
         return { error: 'unknown command ' + op };
       });

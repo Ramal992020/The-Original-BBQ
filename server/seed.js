@@ -221,11 +221,24 @@ function seed() {
   }
 
   if (!store.all('users').length) {
-    auth.createUser({ name: 'صاحب المطعم', email: 'admin@bbq.app', password: 'admin123', role: 'admin' });
-    auth.createUser({ name: 'مشرف الكاشير', email: 'supervisor@bbq.app', password: 'super123', role: 'supervisor' });
+    /* كلمة سر الأدمن/المشرف تيجي من متغيرات البيئة لو موجودة (ADMIN_PASSWORD /
+       SUPERVISOR_PASSWORD) — غير كده القيم الافتراضية للتجربة المحلية. */
+    const env = (k, d) => String(process.env[k] || '').trim().replace(/^['"]+|['"]+$/g, '').trim() || d;
+    const adminEmail = env('ADMIN_EMAIL', 'admin@bbq.app').toLowerCase();
+    const adminPass = env('ADMIN_PASSWORD', 'admin123');
+    const supEmail = env('SUPERVISOR_EMAIL', 'supervisor@bbq.app').toLowerCase();
+    const supPass = env('SUPERVISOR_PASSWORD', 'super123');
+
+    auth.createUser({ name: 'صاحب المطعم', email: adminEmail, password: adminPass, role: 'admin' });
+    auth.createUser({ name: 'مشرف الكاشير', email: supEmail, password: supPass, role: 'supervisor' });
     auth.createUser({ name: 'عميل تجريبي', email: 'demo@bbq.app', password: 'demo123', role: 'customer' });
     created = true;
-    console.log('👤 تم إنشاء الحسابات: admin@bbq.app/admin123 · supervisor@bbq.app/super123 · demo@bbq.app/demo123');
+    const fromEnv = !!String(process.env.ADMIN_PASSWORD || '').trim();
+    const supFromEnv = !!String(process.env.SUPERVISOR_PASSWORD || '').trim();
+    console.log(`👤 تم إنشاء الحسابات: ${adminEmail}/${fromEnv ? '•••• (من ADMIN_PASSWORD)' : 'admin123'} · ${supEmail}/${supFromEnv ? '•••• (من SUPERVISOR_PASSWORD)' : 'super123'} · demo@bbq.app/demo123`);
+    if (!fromEnv) {
+      console.log('   ⚠️  كلمة سر الأدمن الافتراضية (admin123) — على الإنتاج ضيف ADMIN_PASSWORD في متغيرات البيئة.');
+    }
   }
 
   if (!store.all('categories').length) {

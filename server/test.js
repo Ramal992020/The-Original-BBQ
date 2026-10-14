@@ -19,6 +19,9 @@ let BASE = '';
 let pass = 0, fail = 0;
 const results = [];
 
+/* لو ADMIN_PASSWORD مظبوط في البيئة، السيرفر بيخلّي كلمة سر الأدمن هي دي */
+const ADMIN_PW = process.env.ADMIN_PASSWORD || 'admin123';
+
 function check(name, cond, extra = '') {
   if (cond) { pass++; console.log('  PASS  ' + name); }
   else { fail++; console.log('  FAIL  ' + name + (extra ? '  → ' + extra : '')); }
@@ -57,8 +60,8 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   /* ---------------------------- 2) الحسابات ---------------------------- */
   console.log('\n【 الحسابات والأدوار 】');
-  const admin = (await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).data;
-  const sup = (await req('POST', '/api/auth/login', { body: { email: 'supervisor@bbq.app', password: 'super123' } })).data;
+  const admin = (await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).data;
+  const sup = (await req('POST', '/api/auth/login', { body: { email: 'supervisor@bbq.app', password: process.env.SUPERVISOR_PASSWORD || 'super123' } })).data;
   const cust = (await req('POST', '/api/auth/login', { body: { email: 'demo@bbq.app', password: 'demo123' } })).data;
   check('دخول الأدمن', !!admin.token && admin.user.role === 'admin');
   check('دخول المشرف', !!sup.token && sup.user.role === 'supervisor');
@@ -66,6 +69,8 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   const badLogin = await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'wrong' } });
   check('كلمة سر غلط مرفوضة (401)', badLogin.status === 401);
+
+
 
   const newUser = await req('POST', '/api/auth/signup', { body: { name: 'مستخدم جديد', email: 'new@bbq.app', password: 'secret123', phone: '01099998888' } });
   check('تسجيل حساب جديد ينجح', newUser.status === 201);
@@ -561,6 +566,47 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   const trav = await fetch(BASE + '/%2e%2e%2fserver%2findex.js');
   const travBody = await trav.text();
   check('منع الوصول لملفات خارج public (path traversal)', (trav.status === 403 || trav.status === 404) && !travBody.includes('sessionUser'), 'status=' + trav.status);
+
+  /* ---------------------------- 14) النشر ومتغيرات البيئة ---------------------------- */
+  console.log('\n【 النشر: Upstash + ADMIN_PASSWORD 】');
+  const envMod = require('./env');
+
+  r = await req('GET', '/api/health');
+  check('‎/api/health بيقول نوع التخزين', r.status === 200 && typeof r.data.storage === 'string' && typeof r.data.persistent === 'boolean');
+  check('‎/api/health بيقول إن الأدمن من البيئة ولا لأ', typeof r.data.adminPasswordFromEnv === 'boolean');
+
+  /* حساب عميل جديد مخصوص للاختبار (جلسات الحسابات القديمة ممكن تكون اتقفلت من اختبارات الاستعادة) */
+  const probe = (await req('POST', '/api/auth/signup', { body: { name: 'عميل فحص', email: 'probe@bbq.app', password: 'probe12345' } })).data;
+  let sys = await req('GET', '/api/admin/system');
+  check('تقرير النظام محجوب عن غير المسجّلين (401)', sys.status === 401);
+  sys = await req('GET', '/api/admin/system', { token: probe.token });
+  check('تقرير النظام مرفوض للعميل (403)', sys.status === 403, 'status=' + sys.status);
+  sys = await req('GET', '/api/admin/system', { token: sup.token });
+  check('تقرير النظام مرفوض للمشرف (403)', sys.status === 403);
+  sys = await req('GET', '/api/admin/system', { token: admin.token });
+  check('تقرير النظام متاح للأدمن (200)', sys.status === 200 && !!sys.data.vars);
+  check('التقرير فيه حالة المتغيرات الإجبارية', ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'APP_URL', 'ADMIN_PASSWORD']
+    .every((k) => sys.data.vars.some((v) => v.key === k)));
+  check('التقرير مش بيكشف القيم السرية', sys.data.vars.filter((v) => ['UPSTASH_REDIS_REST_TOKEN', 'ADMIN_PASSWORD'].includes(v.key))
+    .every((v) => !v.value || v.value.startsWith('••')));
+
+  /* ADMIN_PASSWORD من متغيرات البيئة لازم يكسب على أي كلمة سر تانية */
+  const prevAdminPw = process.env.ADMIN_PASSWORD;
+  process.env.ADMIN_PASSWORD = 'Bbq#Strong2026';
+  const applied = envMod.enforceCredentials({ log: false });
+  check('ADMIN_PASSWORD بيتطبق على حساب الأدمن', applied.some((x) => x.role === 'admin' && x.status !== 'missing'));
+  const afterEnv = await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'Bbq#Strong2026' } });
+  check('الدخول بكلمة سر ADMIN_PASSWORD بينجح', afterEnv.status === 200 && !!afterEnv.data.token);
+  const afterOld = await req('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } });
+  check('كلمة السر القديمة مش بتشتغل بعد ADMIN_PASSWORD', ADMIN_PW === 'Bbq#Strong2026' || afterOld.status === 401);
+  check('التقرير حسّ إن كلمة السر بقت من البيئة', (await envMod.report({ ping: false })).credentials.adminFromEnv === true);
+  process.env.ADMIN_PASSWORD = 'Bbq#Strong2026';
+  const second = envMod.enforceCredentials({ log: false });
+  check('التطبيق idempotent (مش بيعيد التعيين كل مرة)', second.some((x) => x.status === 'ok'));
+
+  /* رجّع الحالة زي ما كانت قبل الاختبار */
+  if (prevAdminPw === undefined) delete process.env.ADMIN_PASSWORD;
+  else { process.env.ADMIN_PASSWORD = prevAdminPw; envMod.enforceCredentials({ log: false }); }
 
   /* ---------------------------- النتيجة ---------------------------- */
   console.log('\n' + '─'.repeat(58));

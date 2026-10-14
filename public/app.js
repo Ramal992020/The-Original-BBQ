@@ -890,7 +890,7 @@ function viewsAccount() {
 
 /* ============================== ١٣) لوحة الإدارة ============================== */
 const AD = { tab: 'dash', orders: [], stats: null, users: [], customers: [], q: '', status: 'all', payment: 'all', range: 'all', editing: null,
-             payCfg: null, waCfg: null, waTemplates: null, waLog: [] };
+             payCfg: null, waCfg: null, waTemplates: null, waLog: [], system: null };
 
 function adminTabsHTML(active) {
   const tabs = [
@@ -898,7 +898,8 @@ function adminTabsHTML(active) {
     ['orders', '🧾 الطلبات'],
     ['customers', '👥 العملاء'],
     ...(isAdmin() ? [['menu', '🍔 المنيو'], ['users', '🔑 المستخدمون'],
-                     ['payments', '💳 الدفع'], ['whatsapp', '💬 واتساب'], ['settings', '⚙️ الإعدادات']] : []),
+                     ['payments', '💳 الدفع'], ['whatsapp', '💬 واتساب'], ['settings', '⚙️ الإعدادات'],
+                     ['system', '🛠️ النظام']] : []),
   ];
   return `<div class="admin-tabs">${tabs.map(([id, label]) =>
     `<button class="admin-tab ${active === id ? 'on' : ''}" data-act="admin-tab" data-id="${id}">${label}</button>`).join('')}</div>`;
@@ -938,6 +939,7 @@ function viewsAdmin(q) {
   else if (tab === 'payments') body = isAdmin() ? adminPaymentsHTML() : deniedHTML();
   else if (tab === 'whatsapp') body = isAdmin() ? adminWhatsappHTML() : deniedHTML();
   else if (tab === 'settings') body = isAdmin() ? adminSettingsHTML() : deniedHTML();
+  else if (tab === 'system') body = isAdmin() ? adminSystemHTML() : deniedHTML();
 
   return `
   ${headerHTML('admin')}<main class="app"><div class="wrap">
@@ -1382,6 +1384,78 @@ function adminSettingsHTML() {
   </div>`;
 }
 
+
+/* --- تبويب 🛠️ النظام: جاهزية النشر (Upstash + APP_URL + ADMIN_PASSWORD) --- */
+function adminSystemHTML() {
+  const r = AD.system;
+  if (!r) return `<div class="empty"><div class="big">⏳</div><h3>بيحمّل تقرير النظام…</h3></div>`;
+
+  const ICON = { ok: '✅', missing: '❌', invalid: '⚠️', optional: '⚪' };
+  const persistent = r.storage === 'redis' || !r.serverless;
+  const ping = r.redis || {};
+  const note = (t, cls) => `<div class="box" style="margin-top:10px;border-color:${cls === 'danger' ? 'var(--red)' : 'var(--gold)'};border-width:1.5px">
+      <div class="row" style="align-items:flex-start;gap:8px"><span style="font-size:18px">${cls === 'danger' ? '🚨' : '⚠️'}</span><span class="small" style="flex:1">${h(t)}</span></div></div>`;
+
+  return `
+  <div class="kpis">
+    <div class="kpi ${persistent ? 'hl' : ''}"><b>${persistent ? '✔' : '✖'}</b><span>تخزين ${r.storage === 'redis' ? 'Upstash (دائم)' : 'مؤقت'}</span></div>
+    <div class="kpi"><b>${r.serverless ? 'سيرفرلس' : 'سيرفر'}</b><span>طريقة التشغيل${r.serverless ? ' (Vercel)' : ''}</span></div>
+    <div class="kpi ${ping.ok ? 'hl' : ''}"><b>${ping.ok ? ping.ms + 'ms' : ping.skipped ? '—' : '✖'}</b><span>زمن الرد من Upstash</span></div>
+    <div class="kpi ${r.credentials.adminFromEnv ? 'hl' : ''}"><b>${r.credentials.adminFromEnv ? '✔' : '⚠'}</b><span>كلمة سر الأدمن من البيئة</span></div>
+  </div>
+
+  ${(r.warnings || []).map((w) => note(w.message, w.level)).join('')}
+
+  <div class="box" style="margin-top:12px">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <strong>متغيرات البيئة</strong>
+      <button class="btn btn-sm btn-ghost" data-act="system-refresh">🔄 تحديث</button>
+    </div>
+    <p class="small muted" style="margin:6px 0 10px">
+      دي بتتظبط في لوحة الاستضافة (Vercel → Settings → Environment Variables) — مش من هنا، وبعدها لازم <b>Redeploy</b> علشان تتطبّق.
+      القيم السرية مش بتظهر، بس بنأكدلك إنها متسجّلة.
+    </p>
+    <div class="list">
+      ${(r.vars || []).map((v) => `
+        <div class="row-line" style="flex-wrap:wrap">
+          <div class="grow">
+            <div class="row" style="gap:6px;flex-wrap:wrap">
+              <span>${ICON[v.status] || '⚪'}</span>
+              <strong style="font-family:var(--font-mono,monospace);font-size:13px">${h(v.key)}</strong>
+              ${v.level === 'required' && v.active ? '<span class="chip" style="padding:2px 7px;font-size:11px">إجباري</span>' : '<span class="chip" style="padding:2px 7px;font-size:11px">اختياري</span>'}
+            </div>
+            <div class="small muted" style="margin-top:3px">${h(v.label)}</div>
+            ${v.status === 'missing' ? `<div class="small" style="margin-top:4px;color:var(--gold)">↳ ${h(v.hint)}</div>` : ''}
+            ${v.status === 'invalid' ? `<div class="small" style="margin-top:4px;color:var(--red)">↳ ${h(v.error)}</div>` : ''}
+          </div>
+          <span class="small" style="font-family:var(--font-mono,monospace);direction:ltr">${v.status === 'missing' ? '—' : h(v.value)}</span>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <div class="box" style="margin-top:12px">
+    <strong>بيانات الدخول</strong>
+    <div class="line" style="border-top:1px solid var(--border);margin-top:8px">
+      <span>حساب الأدمن</span><span class="small">${h(r.credentials.adminEmail)}</span>
+    </div>
+    <div class="line" style="border-top:1px solid var(--border)">
+      <span>كلمة السر</span><span class="small">${r.credentials.adminFromEnv ? 'من ADMIN_PASSWORD (بيئة)' : 'الافتراضية — غيّرها فورًا'}</span>
+    </div>
+    <p class="small muted" style="margin:8px 0 0">${h(r.credentials.note)}</p>
+  </div>
+
+  <div class="box" style="margin-top:12px">
+    <strong>إزاي تظبطهم على Vercel؟</strong>
+    <ol class="small" style="margin:8px 0 0;padding-inline-start:20px;line-height:1.9">
+      <li>console.upstash.com → Create Database (Free) → انسخ <b>UPSTASH_REDIS_REST_URL</b> و <b>UPSTASH_REDIS_REST_TOKEN</b> من قسم REST API.</li>
+      <li>Vercel → المشروع → <b>Settings → Environment Variables</b> → ضيف: المتغيرين دول + <b>APP_URL</b> + <b>ADMIN_PASSWORD</b> (+ <code>DEMO_LOGIN=0</code>).</li>
+      <li><b>Deployments → ⋯ → Redeploy</b> — من غير redeploy المتغيرات مش بتتطبّق.</li>
+      <li>رجّع هنا واضغط «تحديث» — لازم تشوف ✔ جنب كل متغير إجباري.</li>
+    </ol>
+    <p class="small muted" style="margin:8px 0 0">الشرح الكامل بالصور: <code>docs/VERCEL-UPSTASH.md</code> في الريبو.</p>
+  </div>`;
+}
+
 /* ============================== ١٤) نافذة تفاصيل الطلب (للإدارة) ============================== */
 let drawerReturnFocus = null;
 function openOrderDrawer(id) {
@@ -1589,6 +1663,7 @@ function adminBodyFor(tab) {
   if (tab === 'payments') return isAdmin() ? adminPaymentsHTML() : deniedHTML();
   if (tab === 'whatsapp') return isAdmin() ? adminWhatsappHTML() : deniedHTML();
   if (tab === 'settings') return isAdmin() ? adminSettingsHTML() : deniedHTML();
+  if (tab === 'system') return isAdmin() ? adminSystemHTML() : deniedHTML();
   return '';
 }
 
@@ -1617,6 +1692,7 @@ async function render(opts = {}) {
     if (AD.tab === 'users' && isAdmin() && !AD.users.length) AD.users = (await api.req('/api/admin/users')).users;
     if (AD.tab === 'payments' && isAdmin() && !AD.payCfg) { const d = await api.req('/api/admin/payments'); AD.payCfg = d.config; AD.methods = d.methods || []; AD.paidList = d.paid || []; }
     if (AD.tab === 'whatsapp' && isAdmin() && !AD.waCfg) { const d = await api.req('/api/admin/whatsapp'); AD.waCfg = d.config; AD.waTemplates = d.templates; AD.waLog = d.log || []; }
+    if (AD.tab === 'system' && isAdmin() && !AD.system) AD.system = await api.req('/api/admin/system');
   }
 
   let html = '';
@@ -2040,6 +2116,13 @@ document.addEventListener('click', async (e) => {
 
     /* ---- الإدارة ---- */
     case 'admin-tab': go('admin?tab=' + id); break;
+    case 'system-refresh': {
+      AD.system = null;
+      try { AD.system = await api.req('/api/admin/system'); toast('تم تحديث التقرير ✅'); }
+      catch (err) { toast(err.message, 3500); }
+      softRefreshAdmin();
+      break;
+    }
     case 'admin-filter': AD.status = id; await loadAdminOrders(); softRefreshAdmin(); break;
     case 'admin-pay-filter': AD.payment = id; await loadAdminOrders(); softRefreshAdmin(); break;
     case 'admin-range': AD.range = el.getAttribute('data-v'); await loadAdminOrders(); softRefreshAdmin(); break;
