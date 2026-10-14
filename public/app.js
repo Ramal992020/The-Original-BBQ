@@ -184,7 +184,7 @@ function headerHTML(active) {
   return `
   <header class="header">
     <a class="brand" href="#/">
-      <span class="logo">🔥</span>
+      <span class="logo"><img src="/img/logo-mark.svg" alt="شعار The Original BBQ" width="38" height="38" /></span>
       <span class="brand-text">
         <span class="brand-name">${h(S.name || '')}</span>
         <span class="brand-sub">${h(S.tagline || '')}${S.deliveryEta ? ' · توصيل خلال ' + h(S.deliveryEta) : ''}</span>
@@ -212,7 +212,7 @@ function navHTML(active) {
 function footerHTML() {
   return `
   <footer class="footer">
-    <div class="logo-row"><span style="font-size:22px">🔥</span><strong>${h(S.name || '')}</strong></div>
+    <div class="logo-row"><img class="footer-logo" src="/img/logo.svg" alt="The Original BBQ — مشاوي على الفحم" /></div>
     <div>📍 ${h(S.address || '')}</div>
     <div>🕒 ${h(S.hoursText || '')}</div>
     <div>🛵 التوصيل خلال ${h(S.deliveryEta || '')}${Number(S.deliveryFee) ? ` · رسوم التوصيل ${money(S.deliveryFee)}` : ''}</div>
