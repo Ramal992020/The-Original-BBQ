@@ -4,50 +4,27 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>إتمام الدفع — The Original BBQ</title>
-  <meta name="theme-color" content="#151010" />
+  <meta name="theme-color" content="#0D0A08" />
   <meta name="color-scheme" content="light dark" />
+  <script src="/theme.js?v=959848079cc2"></script>
+  <link rel="stylesheet" href="/fonts.css?v=3eb34584909d" />
+  <link rel="stylesheet" href="/styles.css?v=4f84f995955d" />
   <style>
-    /* ===== نفس ثيم اللوجو: داكن (افتراضي) + فاتح ========================= */
-    :root {
-      --brand-deep:#9D0F14; --brand-red:#E82823; --brand-flame:#EF4136;
-      --brand-orange:#F68C1D; --brand-yellow:#FFF200;
-      --grad-cta: linear-gradient(135deg, #EF4136 0%, #F68C1D 100%);
-      --ink-cta:#1F0900;
-      --font:'Segoe UI','Noto Kufi Arabic',Tahoma,system-ui,sans-serif;
-      color-scheme: dark;
-      --bg:#151010; --surface:#1C1514; --surface-2:#251B19; --border:#3B2B28;
-      --text:#F7EFEA; --muted:#AE9B95;
-      --ember:#EF4136; --ember-2:#F7941D; --link:#F7941D; --gold:#F5C869;
-      --green:#34C07A; --red:#EF5350;
-      --badge-bg:rgba(247,148,29,.12); --badge-border:rgba(247,148,29,.35);
-      --glow-1:rgba(239,65,54,.14); --glow-2:rgba(247,148,29,.09);
-      --shadow:0 18px 50px rgba(0,0,0,.5);
-    }
-    [data-theme='light'] {
-      color-scheme: light;
-      --bg:#FFF8F5; --surface:#FFFFFF; --surface-2:#FFF2EC; --border:#F1D9CE;
-      --text:#2B1310; --muted:#7F6159;
-      --ember:#EF4136; --ember-2:#C1440E; --link:#C1440E; --gold:#9A5B00;
-      --green:#0E7A47; --red:#D32F2F;
-      --badge-bg:rgba(193,68,14,.08); --badge-border:color-mix(in srgb, var(--link) 35%, transparent);
-      --glow-1:rgba(239,65,54,.08); --glow-2:rgba(247,148,29,.07);
-      --shadow:0 18px 50px rgba(120,40,20,.14);
-    }
+    /* Palette and fonts are shared with the app; payment layout stays independent. */
+    :root { --badge-bg: var(--tint-ember); --badge-border: var(--border); }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font); min-height:100vh;
            display:flex; align-items:center; justify-content:center; padding:18px;
            transition:background-color .25s ease, color .25s ease; }
-    body::before { content:''; position:fixed; inset:0; pointer-events:none;
-      background: radial-gradient(700px 380px at 80% -10%, var(--glow-1), transparent 60%),
-                  radial-gradient(600px 340px at 0% 105%, var(--glow-2), transparent 60%); }
-    .card { position:relative; width:100%; max-width:460px; background:var(--surface); border:1px solid var(--border);
-            border-radius:22px; padding:22px; box-shadow:var(--shadow);
+    .card { display:block; position:relative; width:100%; max-width:460px; background:var(--surface); border:1px solid var(--border);
+            border-radius:12px; padding:22px; box-shadow:var(--shadow);
             transition:background-color .25s ease, border-color .25s ease; }
     .brand { display:flex; align-items:center; justify-content:center; gap:10px; margin:4px 0 12px; }
     .brand .logo-full {
       height:88px; width:auto; max-width:100%; object-fit:contain;
-      padding:6px 9px; background:#FFF9F4; border:1px solid #F1D9CE; border-radius:14px;
+      padding:6px 9px; border-radius:8px; filter:drop-shadow(0 2px 6px rgba(246,140,29,.3));
     }
+    [data-theme='night'] .brand .logo-full { background:#1A1410; filter:none; }
     h1 { font-size:20px; margin:16px 0 4px; } p.sub { margin:0 0 16px; color:var(--muted); font-size:13px; }
     .badge { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:999px; font-size:12px;
              font-weight:800; background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--link); }
@@ -55,11 +32,11 @@
     .row { display:flex; justify-content:space-between; gap:12px; padding:6px 0; font-size:14px; }
     .row + .row { border-top:1px dashed var(--border); }
     .row.total { font-weight:800; font-size:17px; border-top:1px solid var(--border); margin-top:6px; padding-top:12px; }
-    .price { color:var(--gold); font-weight:800; }
+    .price { color:var(--gold); font-weight:900; }
     .btn { display:block; width:100%; padding:15px; border:0; border-radius:14px; font-weight:800; font-size:15px;
-           font-family:inherit; cursor:pointer; margin-top:10px; }
-    .btn-pay { background:var(--grad-cta); color:var(--ink-cta);
-               box-shadow:0 10px 26px rgba(239,65,54,.32); }
+           font-family:var(--font-heading); cursor:pointer; margin-top:10px; }
+    .btn-pay { background:var(--btn-bg); color:var(--btn-text);
+               box-shadow:var(--shadow-cta); }
     .btn-fail { background:transparent; color:var(--red); border:1px solid color-mix(in srgb, var(--red) 40%, transparent); }
     .btn:disabled { opacity:.55; cursor:not-allowed; }
     .note { font-size:12px; color:var(--muted); text-align:center; margin-top:14px; line-height:1.7; }
@@ -77,23 +54,12 @@
                 display:grid; place-items:center; font-size:16px; cursor:pointer;
                 background:var(--surface-2); border:1px solid var(--border); }
   </style>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('bbq_theme');
-        if (t !== 'light' && t !== 'dark') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', t);
-        var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
-      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
-    })();
-  </script>
 </head>
 <body>
   <div class="card" id="card">
-    <button id="themeBtn" title="تبديل الثيم">🌙</button>
+    <button id="themeBtn" type="button" aria-label="تفعيل وضع الليل (فاتح)" title="تفعيل وضع الليل (فاتح)">☀️</button>
     <div class="brand">
-      <img class="logo-full" src="/img/logo.svg" alt="The Original BBQ — مشاوي على الفحم" />
+      <img class="logo-full" src="/img/logo.svg?v=fba50bf4289a" alt="The Original BBQ — مشاوي على الفحم" />
     </div>
     <div id="body"><div class="spinner"></div></div>
   </div>
@@ -103,24 +69,22 @@ const q = new URLSearchParams(location.search);
 const ref = q.get('ref') || '';
 const token = q.get('t') || '';
 const $ = (s) => document.querySelector(s);
-const money = (n, cur) => `${Math.round(Number(n) || 0).toLocaleString('en-US')} ${cur || 'ج.م'}`;
+const money = (n, cur) => `${Math.round(Number(n) || 0).toLocaleString('ar-EG')} ${esc(({ SAR: 'ر.س', EGP: 'ج.م' })[cur] || cur || 'ج.م')}`;
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-/* ===== الثيم (فاتح/داكن) — نفس مفتاح التطبيق الرئيسي ===== */
-function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
-function setTheme(t) {
-  document.documentElement.setAttribute('data-theme', t);
-  try { localStorage.setItem('bbq_theme', t); } catch (e) {}
-  var m = document.querySelector('meta[name="theme-color"]');
-  if (m) m.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
-  var b = document.getElementById('themeBtn');
-  if (b) { b.textContent = t === 'light' ? '☀️' : '🌙'; b.title = t === 'light' ? 'الوضع الفاتح — اضغط لليل' : 'الوضع الليلي — اضغط للفاتح'; }
+/* Day = dark; night = light. The app and payment page share one saved preference. */
+function updateThemeButton() {
+  const night = window.BBQTheme.get() === 'night';
+  const button = $('#themeBtn');
+  const label = night ? 'تفعيل وضع النهار (داكن)' : 'تفعيل وضع الليل (فاتح)';
+  button.textContent = night ? '🌙' : '☀️';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(night));
 }
-(function initThemeBtn() {
-  var b = document.getElementById('themeBtn');
-  setTheme(currentTheme());
-  if (b) b.onclick = function () { setTheme(currentTheme() === 'light' ? 'dark' : 'light'); };
-})();
+window.addEventListener('bbq:theme', updateThemeButton);
+updateThemeButton();
+$('#themeBtn').onclick = () => window.BBQTheme.toggle();
 
 async function load() {
   try {
@@ -134,7 +98,7 @@ async function load() {
         <div class="err">⚠️</div>
         <h1>ينفع نكمل الدفع؟</h1>
         <p class="sub">${esc(e.message)}</p>
-        <a class="btn btn-fail" style="text-decoration:none;text-align:center" href="/#/orders">رجوع لطلباتي</a>
+        <a class="btn btn-fail" style="text-decoration:none;text-align:center" href="/#/my-orders">رجوع لطلباتي</a>
       </div>`;
   }
 }

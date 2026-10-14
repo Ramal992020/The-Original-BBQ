@@ -4,32 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>The Original BBQ — مشاوي على الفحم</title>
-  <meta name="description" content="The Original BBQ — اطلب مشاوي على الفحم وتابع طلبك خطوة بخطوة." />
-  <meta name="theme-color" content="#151010" />
-  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="The Original BBQ — مشاوي على الفحم، على أصوله. اختار من المنيو وتابع طلبك لحد بابك." />
+  <meta name="theme-color" content="#0D0A08" />
+  <meta name="color-scheme" content="dark light" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/img/logo-mark.svg" />
   <link rel="apple-touch-icon" sizes="180x180" href="/img/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/styles.css" />
-  <script>
-    /* طبّق الثيم قبل أول رسم عشان مفيش وامضة بيضاء/سوداء */
-    (function () {
-      try {
-        var t = localStorage.getItem('bbq_theme');
-        if (t !== 'light' && t !== 'dark') {
-          t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        }
-        document.documentElement.setAttribute('data-theme', t);
-        var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
-      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
-    })();
-  </script>
+  <script src="/theme.js?v=959848079cc2"></script>
+  <link rel="preload" href="/fonts/cairo-arabic-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/tajawal-arabic-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/fonts.css?v=3eb34584909d" />
+  <link rel="stylesheet" href="/styles.css?v=4f84f995955d" />
 </head>
 <body>
+  <button type="button" class="skip-link" id="skipLink">تخطَّ إلى المحتوى</button>
+  <div class="splash-screen" id="splash" role="status" aria-live="polite" aria-label="جاري تحميل منيو الأصلي">
+    <img class="splash-logo" src="/img/logo.svg?v=fba50bf4289a" alt="شعار The Original BBQ الكامل" width="280" height="198" />
+    <span class="splash-brand" dir="ltr">THE ORIGINAL BBQ</span>
+    <p class="splash-text">بنولّع الفحم…</p>
+    <span class="splash-loader" aria-hidden="true"></span>
+  </div>
   <div id="view"></div>
-  <script src="/app.js"></script>
+  <noscript>
+    <style>#splash { display: none; }</style>
+    <div class="empty"><h1>The Original BBQ</h1><p>فعّل JavaScript في المتصفح عشان تقدر تتصفح المنيو وتطلب.</p></div>
+  </noscript>
+  <script src="/app.js?v=d908c79efc28"></script>
 </body>
 </html>

@@ -42,3 +42,6 @@ yarn-error.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local font downloads, browser QA and other tooling scratch files
+.cache/

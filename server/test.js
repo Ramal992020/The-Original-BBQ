@@ -220,13 +220,18 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   /* ---------------------------- 8) إدارة المنيو والصور ---------------------------- */
   console.log('\n【 إدارة المنيو والصور 】');
-  const newItem = await req('POST', '/api/admin/menu', { token: admin.token, body: { name: 'برجر تجريبي جديد', desc: 'برجر لحم مشوي على الفحم بصوص خاص', price: 175, cat: 'charcoal' } });
+  const newItem = await req('POST', '/api/admin/menu', { token: admin.token, body: { name: 'برجر تجريبي جديد', desc: 'برجر لحم مشوي على الفحم بصوص خاص', price: 175, cat: 'charcoal', spicy: true } });
   check('الأدمن يضيف صنف جديد', newItem.status === 201);
   check('الصنف الجديد اتولّدت له صورة تلقائيًا', !!newItem.data.item.image && ['ai', 'pool', 'placeholder'].includes(newItem.data.item.imageSource), newItem.data.item.image + ' / ' + newItem.data.item.imageSource);
+  check('علامة حار بتتسجل من بيانات الصنف', newItem.data.item.spicy === true);
   const newId = newItem.data.item.id;
 
-  const patched = await req('PATCH', '/api/admin/menu/' + newId, { token: admin.token, body: { price: 199, featured: true } });
+  const patched = await req('PATCH', '/api/admin/menu/' + newId, { token: admin.token, body: { price: 199, featured: true, spicy: false, available: false } });
   check('الأدمن يعدّل صنف', patched.status === 200 && patched.data.item.price === 199 && patched.data.item.featured === true);
+
+  check('الأدمن يقدر يوقف الحار والتوفر للطلب', patched.data.item.spicy === false && patched.data.item.available === false);
+  const publicItem = (await req('GET', '/api/bootstrap')).data.menu.find((m) => m.id === newId);
+  check('التوفر والحار بيوصلوا للواجهة', publicItem.spicy === false && publicItem.available === false);
 
   const genOne = await req('POST', '/api/admin/menu/' + newId + '/generate-image', { token: admin.token });
   check('توليد صورة بالذكاء الاصطناعي لصنف', genOne.status === 200 && !!genOne.data.item.image);
@@ -528,6 +533,22 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('ملف التنسيقات موجود', css.status === 200);
   const appjs = await fetch(BASE + '/app.js');
   check('ملف الكود موجود', appjs.status === 200);
+  const sharedTheme = await fetch(BASE + '/theme.js');
+  check('ملف الثيم المشترك موجود', sharedTheme.status === 200 && (await sharedTheme.text()).includes('window.BBQTheme'));
+  const fontsCSS = await fetch(BASE + '/fonts.css');
+  check('تعريفات الخطوط المحلية موجودة', fontsCSS.status === 200 && (await fontsCSS.text()).includes("font-family: 'Cairo'"));
+  const fontPaths = ['cairo-arabic-wght-normal.woff2', 'cairo-latin-wght-normal.woff2',
+    'tajawal-arabic-400-normal.woff2', 'tajawal-latin-400-normal.woff2',
+    'tajawal-arabic-500-normal.woff2', 'tajawal-latin-500-normal.woff2',
+    'tajawal-arabic-700-normal.woff2', 'tajawal-latin-700-normal.woff2'];
+  const fonts = await Promise.all(fontPaths.map(async (name) => {
+    const response = await fetch(BASE + '/fonts/' + name);
+    return response.status === 200 && response.headers.get('content-type') === 'font/woff2'
+      && Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString() === 'wOF2';
+  }));
+  check('Cairo وTajawal بيتقدّموا بصيغة WOFF2 الصحيحة', fonts.every(Boolean));
+  const fullLogo = await fetch(BASE + '/img/logo.svg');
+  check('الشعار الكامل محتفظ بأبعاد اللوحة الأصلية', (await fullLogo.text()).includes('viewBox="0 0 841.9 595.3"'));
   const img = await fetch(BASE + '/img/ai-hero.jpg');
   check('صور التطبيق (AI) موجودة', img.status === 200 && (img.headers.get('content-type') || '').includes('jpeg'));
   const manifest = await fetch(BASE + '/manifest.webmanifest');

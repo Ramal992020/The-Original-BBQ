@@ -32,7 +32,34 @@ function timeAgo(ts) {
   if (s < 86400) return `قبل ${Math.floor(s / 3600)} ساعة`;
   return fmtDT(ts);
 }
-const money = (n) => `${Math.round(Number(n) || 0).toLocaleString('en-US')} ${S.currency}`;
+const formatAmount = (n) => Math.round(Number(n) || 0).toLocaleString('ar-EG');
+// The display currency comes from restaurant settings; never relabel live EGP prices as SAR.
+const displayCurrency = () => ({ SAR: 'ر.س', EGP: 'ج.م' })[S.currency] || S.currency || 'ر.س';
+const money = (n) => `${formatAmount(n)} ${h(displayCurrency())}`;
+const moneyHTML = (n) => `<span class="price-amount"><bdi dir="ltr">${formatAmount(n)}</bdi> <small>${h(displayCurrency())}</small></span>`;
+
+function icon(name) {
+  const paths = {
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
+    flame: '<path d="M12 3c1 4-3 5-3 8 0 1 .6 2 1.5 2.5 0-2 2-3 3-5 2 2 4.5 4.5 4.5 7.5a6 6 0 0 1-12 0c0-4 4-7 6-13Z"/>',
+    cart: '<path d="M3 3h2l2.5 12h11l2-9H6"/><circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/>',
+    receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2Z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/>',
+    moon: '<path d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/>',
+    phone: '<path d="m7 3 3 5-2 2a14 14 0 0 0 6 6l2-2 5 3-1 4C10 22 2 14 3 4Z"/>',
+    bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/>',
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    arrow: '<path d="M20 12H4m6-6-6 6 6 6"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    pin: '<path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 0 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+    chat: '<path d="M21 11a9 9 0 0 1-9 9 10 10 0 0 1-4-.8L3 21l1.8-5A9 9 0 1 1 21 11Z"/><path d="M8 10h8M8 14h5"/>',
+    chef: '<path d="M7 15a5 5 0 0 1-2-9 4 4 0 0 1 7-2 4 4 0 0 1 7 2 5 5 0 0 1-2 9v6H7Z"/><path d="M7 17h10"/>',
+  };
+  return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths[name] || paths.flame}</svg>`;
+}
+
 
 let toastTimer;
 function toast(msg, ms = 2400) {
@@ -42,47 +69,50 @@ function toast(msg, ms = 2400) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.innerHTML = ''; }, ms);
 }
 
-/* ============================== الثيم (فاتح/داكن) ==============================
-   الألوان كلها من CSS (`--*`) والتبديل بيغيّر `data-theme` على <html> بس.
-   الاختيار محفوظ في localStorage، والافتراضي = إعداد النظام. */
-const THEME_KEY = 'bbq_theme';
-function getTheme() {
-  try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark') return t; } catch {}
-  return (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
-}
-function applyTheme(t, persist = true) {
-  document.documentElement.setAttribute('data-theme', t);
-  if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch {} }
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', t === 'light' ? '#FFF8F5' : '#151010');
+/* ============================== الثيم ==============================
+   Day / النهار = داكن. Night / الليل = فاتح. Shared with pay.html in theme.js. */
+const getTheme = () => window.BBQTheme.get();
+function updateThemeControls() {
+  const night = getTheme() === 'night';
+  const label = night ? 'تفعيل وضع النهار (داكن)' : 'تفعيل وضع الليل (فاتح)';
   const btn = $('#themeBtn');
-  if (btn) { btn.textContent = t === 'light' ? '☀️' : '🌙'; btn.title = t === 'light' ? 'الوضع الفاتح — اضغط لليل' : 'الوضع الليلي — اضغط للفاتح'; }
-  // زر صفحة "حسابي" — نفس الوظيفة بس بنص وصفي
+  if (btn) {
+    btn.innerHTML = icon(night ? 'moon' : 'sun');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-pressed', String(night));
+  }
   $$('[data-act="theme"]').forEach((b) => {
     if (b.id === 'themeBtn') return;
-    b.innerHTML = t === 'light' ? '☀️ الوضع الفاتح' : '🌙 الوضع الليلي';
+    b.innerHTML = `${icon(night ? 'moon' : 'sun')} ${night ? 'الليل — فاتح' : 'النهار — داكن'}`;
+    b.setAttribute('aria-label', label);
+    b.setAttribute('aria-pressed', String(night));
   });
 }
-function toggleTheme() {
-  const next = getTheme() === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-  toast(next === 'light' ? 'الوضع الفاتح ☀️' : 'الوضع الليلي 🌙', 1600);
+function applyTheme(t, persist = true) {
+  window.BBQTheme.set(t, { persist });
+  updateThemeControls();
 }
-/* طبّق الثيم فورًا قبل رسم أي حاجة (بيتكرّر كمان في index.html عشان مفيش وامضة) */
-applyTheme(getTheme(), false);
+function toggleTheme() {
+  const next = getTheme() === 'night' ? 'day' : 'night';
+  applyTheme(next);
+  toast(next === 'night' ? 'وضع الليل — فاتح 🌙' : 'وضع النهار — داكن ☀️', 1600);
+}
+window.addEventListener('bbq:theme', updateThemeControls);
 
 /* ============================== ٢) الاتصال بالسيرفر ============================== */
 const TOKEN_KEY = 'bbq_token';
+function readStorage(key) { try { return localStorage.getItem(key) || ''; } catch { return ''; } }
 const api = {
-  token: localStorage.getItem(TOKEN_KEY) || '',
+  token: readStorage(TOKEN_KEY),
   setToken(t) { this.token = t || ''; try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} },
-  async req(path, { method = 'GET', body, raw } = {}) {
+  async req(path, { method = 'GET', body, raw, signal } = {}) {
     const headers = {};
     if (this.token) headers.authorization = 'Bearer ' + this.token;
     let payload;
     if (raw) payload = raw;
     else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
-    const res = await fetch(path, { method, headers, body: payload });
+    const res = await fetch(path, { method, headers, body: payload, signal });
     let data = {};
     try { data = await res.json(); } catch {}
     if (!res.ok) { const e = new Error(data.error || ('خطأ ' + res.status)); e.status = res.status; throw e; }
@@ -104,8 +134,12 @@ const byId = (id) => MENU.find((x) => String(x.id) === String(id));
 const catName = (id) => (CATS.find((c) => c.id === id) || {}).name || '';
 
 async function loadBootstrap() {
-  const d = await api.req('/api/bootstrap');
-  S = d.settings; CATS = d.categories; MENU = d.menu; ME = d.user;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const d = await api.req('/api/bootstrap', { signal: controller.signal });
+    S = d.settings; CATS = d.categories; MENU = d.menu; ME = d.user;
+  } finally { clearTimeout(timeout); }
 }
 
 /* بحث عن الأصناف المستوردة اللي مش عندها صورة (للأدمن) */
@@ -133,6 +167,7 @@ function cartTotals() {
 
 let promoCode = '';
 function addToCart(item, qty, addons, note) {
+  if (item.available === false) { toast('الصنف ده نفد اليوم. اختار حاجة تانية من المنيو.'); return; }
   const key = [item.id, (addons || []).map((a) => a.name).sort().join('+'), note || ''].join('|');
   const found = cart.find((c) => c.key === key);
   if (found) found.qty += qty;
@@ -151,13 +186,13 @@ function parseHash() {
 const go = (p) => { location.hash = '#/' + String(p).replace(/^#?\/?/, ''); };
 
 const NAV = [
-  { to: 'home', icon: '🏠', label: 'الرئيسية' },
-  { to: 'menu', icon: '📋', label: 'المنيو' },
-  { to: 'cart', icon: '🛒', label: 'السلة', cart: true },
-  { to: 'orders', icon: '🧾', label: 'طلباتي' },
-  { to: 'account', icon: '👤', label: 'حسابي' },
+  { to: 'home', icon: 'home', label: 'الرئيسية' },
+  { to: 'orders', icon: 'flame', label: 'اطلب الآن' },
+  { to: 'cart', icon: 'cart', label: 'السلة', cart: true },
+  { to: 'my-orders', icon: 'receipt', label: 'طلباتي' },
+  { to: 'account', icon: 'user', label: 'حسابي' },
 ];
-const navItems = () => (isStaff() ? [...NAV, { to: 'admin', icon: '🧑‍🍳', label: 'لوحة الإدارة' }] : NAV);
+const navItems = () => (isStaff() ? [...NAV, { to: 'admin', icon: 'chef', label: 'الإدارة' }] : NAV);
 
 /* ============================== ٦) عناصر مشتركة ============================== */
 function statusOf(id) { return (S.statuses || []).find((s) => s.id === id) || { id, label: id, emoji: '•', note: '' }; }
@@ -181,83 +216,129 @@ const FLOW = () => (S.statuses || []).filter((s) => s.id !== 'cancelled');
 
 function headerHTML(active) {
   const unread = NOTIFS.filter((n) => !n.read).length;
+  const night = getTheme() === 'night';
+  const themeLabel = night ? 'تفعيل وضع النهار (داكن)' : 'تفعيل وضع الليل (فاتح)';
   return `
-  <header class="header">
-    <a class="brand" href="#/">
-      <span class="logo"><img src="/img/logo-mark.svg" alt="شعار The Original BBQ" width="38" height="38" /></span>
-      <span class="brand-text">
-        <span class="brand-name">${h(S.name || '')}</span>
-        <span class="brand-sub">${h(S.tagline || '')}${S.deliveryEta ? ' · توصيل خلال ' + h(S.deliveryEta) : ''}</span>
-      </span>
-    </a>
-    ${isStaff() ? `<button class="icon-btn" id="notifBtn" title="الإشعارات">🔔${unread ? `<span class="badge-n red">${unread}</span>` : ''}</button>` : ''}
-    <button class="icon-btn" id="themeBtn" data-act="theme" title="تبديل الثيم">${getTheme() === 'light' ? '☀️' : '🌙'}</button>
-    <a class="icon-btn" href="tel:${h(S.phone || '')}" title="اتصال">📞</a>
-    <button class="icon-btn" data-act="nav" data-to="cart" title="السلة">🛒<span class="badge-n ${cartCount() ? '' : 'hidden'}" id="headBadge">${cartCount()}</span></button>
+  <header class="header app-header ${isStaff() ? 'staff-header' : ''}">
+    <div class="header-inner">
+      <a class="brand" href="#/" aria-label="${h(S.name || 'The Original BBQ')} — الرئيسية">
+        <span class="logo-container"><img class="app-logo" src="/img/logo.svg?v=fba50bf4289a" alt="شعار The Original BBQ الكامل" width="56" height="40" /></span>
+        <span class="brand-text header-info">
+          <span class="brand-name" dir="auto">${h((S.name || 'The Original BBQ').toUpperCase())}</span>
+          <span class="brand-sub tagline">${h(S.tagline || 'مشاوي على الفحم')} · على أصوله</span>
+        </span>
+      </a>
+      <nav class="header-links" aria-label="التنقل الرئيسي">
+        <a href="#/" class="${active === 'home' ? 'active' : ''}" ${active === 'home' ? 'aria-current="page"' : ''}>الرئيسية</a>
+        <a href="#/orders" class="${active === 'orders' ? 'active' : ''}" ${active === 'orders' ? 'aria-current="page"' : ''}>اطلب الآن</a>
+        <a href="#/my-orders" class="${active === 'my-orders' ? 'active' : ''}" ${active === 'my-orders' ? 'aria-current="page"' : ''}>طلباتي</a>
+      </nav>
+      <div class="header-actions">
+        ${isStaff() ? `<button class="icon-btn" id="notifBtn" title="الإشعارات" aria-label="الإشعارات">${icon('bell')}${unread ? `<span class="badge-n red">${formatAmount(unread)}</span>` : ''}</button>` : ''}
+        <button class="icon-btn theme-toggle" id="themeBtn" data-act="theme" title="${themeLabel}" aria-label="${themeLabel}" aria-pressed="${night}">${icon(night ? 'moon' : 'sun')}</button>
+        <a class="icon-btn header-phone" href="tel:${h(S.phone || '')}" title="اتصل بالمطعم" aria-label="اتصل بالمطعم">${icon('phone')}</a>
+        <button class="icon-btn" data-act="nav" data-to="cart" title="السلة" aria-label="السلة">${icon('cart')}<span class="badge-n ${cartCount() ? '' : 'hidden'}" id="headBadge">${formatAmount(cartCount())}</span></button>
+      </div>
+    </div>
   </header>`;
 }
 
 function navHTML(active) {
   const items = navItems();
   return `
-  <nav class="nav" style="grid-template-columns:repeat(${items.length},1fr)">
-    ${items.map((n) => `
-      <button data-act="nav" data-to="${n.to}" class="${active === n.to ? 'on' : ''}">
-        <span class="ni">${n.icon}</span><span>${n.label}</span>
-        ${n.cart ? `<span class="nb ${cartCount() ? '' : 'hidden'}" id="navBadge">${cartCount()}</span>` : ''}
-      </button>`).join('')}
+  <nav class="nav bottom-nav" aria-label="التنقل السريع">
+    <div class="nav-inner" style="grid-template-columns:repeat(${items.length},minmax(0,1fr))">
+      ${items.map((n) => `
+        <button data-act="nav" data-to="${n.to}" class="nav-item ${active === n.to ? 'active on' : ''}" ${active === n.to ? 'aria-current="page"' : ''}>
+          <span class="ni">${icon(n.icon)}</span><span>${n.label}</span>
+          ${n.cart ? `<span class="nb ${cartCount() ? '' : 'hidden'}" id="navBadge">${formatAmount(cartCount())}</span>` : ''}
+        </button>`).join('')}
+    </div>
   </nav>`;
 }
 
 function footerHTML() {
   return `
   <footer class="footer">
-    <div class="logo-row"><img class="footer-logo" src="/img/logo.svg" alt="The Original BBQ — مشاوي على الفحم" /></div>
-    <div>📍 ${h(S.address || '')}</div>
-    <div>🕒 ${h(S.hoursText || '')}</div>
-    <div>🛵 التوصيل خلال ${h(S.deliveryEta || '')}${Number(S.deliveryFee) ? ` · رسوم التوصيل ${money(S.deliveryFee)}` : ''}</div>
-    ${Number(S.freeDeliveryOver) ? `<div>🎉 توصيل مجاني على الطلبات فوق ${money(S.freeDeliveryOver)}</div>` : ''}
-    <div class="socials">
-      <a href="tel:${h(S.phone || '')}" aria-label="اتصال">📞</a>
-      <a href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener" aria-label="واتساب">💬</a>
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="logo-row"><img class="footer-logo" src="/img/logo.svg?v=fba50bf4289a" alt="The Original BBQ — مشاوي على الفحم" width="100" height="71" loading="lazy" /></div>
+        <div><strong dir="auto">${h(S.name || 'The Original BBQ')}</strong><span>طعم أصلي. على أصوله.</span>
+          <div class="socials">
+            <a href="tel:${h(S.phone || '')}" aria-label="اتصل بالمطعم">${icon('phone')}</a>
+            <a href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener" aria-label="واتساب المطعم">${icon('chat')}</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-details">
+        ${S.address ? `<div>${icon('pin')} ${h(S.address)}</div>` : ''}
+        ${S.hoursText ? `<div>${icon('clock')} ${h(S.hoursText)}</div>` : ''}
+        ${S.deliveryEta ? `<div>${icon('cart')} التوصيل خلال ${h(S.deliveryEta)}${Number(S.deliveryFee) ? ` · ${money(S.deliveryFee)}` : ''}</div>` : ''}
+        ${Number(S.freeDeliveryOver) ? `<div>توصيل مجاني للطلبات فوق ${money(S.freeDeliveryOver)}</div>` : ''}
+      </div>
     </div>
-    <div class="credit">${h(S.name || '')} — تطبيق طلبات كامل مع لوحة إدارة وإشعارات</div>
+    <div class="credit">© ${new Date().getFullYear()} ${h(S.name || 'The Original BBQ')}</div>
   </footer>`;
 }
 
 function renderCartBar() {
   let bar = $('#cartBar');
   const { name } = parseHash();
-  const hide = !cart.length || ['cart', 'checkout', 'login', 'signup'].includes(name) || name === 'admin';
-  if (!bar) { bar = document.createElement('div'); bar.id = 'cartBar'; bar.className = 'cart-bar'; document.body.appendChild(bar); }
-  if (hide) { bar.classList.remove('show'); return; }
+  const hide = !cart.length || ['cart', 'checkout', 'login', 'signup', 'admin'].includes(name);
+  document.body.classList.toggle('cart-visible', !hide);
+  if (!bar) {
+    bar = document.createElement('button');
+    bar.type = 'button'; bar.id = 'cartBar'; bar.className = 'cart-bar floating-cart';
+    document.body.appendChild(bar);
+  }
+  bar.classList.toggle('show', !hide);
+  bar.setAttribute('aria-hidden', String(hide));
+  bar.tabIndex = hide ? -1 : 0;
+  if (hide) return;
   const t = cartTotals();
-  bar.innerHTML = `<span>🛒 ${cartCount()} صنف · ${money(t.total)}</span><span class="spacer" style="flex:1"></span><span>إتمام الطلب ←</span>`;
+  bar.setAttribute('aria-label', `عرض السلة: ${formatAmount(cartCount())} صنف، ${money(t.total)}`);
+  bar.innerHTML = `<span class="cart-bar-info">${icon('cart')}<span class="cart-bar-count">${formatAmount(cartCount())}</span><span>سلتك · ${money(t.total)}</span></span><span class="cart-bar-action">عرض السلة ${icon('arrow')}</span>`;
   bar.onclick = () => go('cart');
-  bar.classList.add('show');
 }
 
 function updateBadges() {
   for (const [id, val] of [['#navBadge', cartCount()], ['#headBadge', cartCount()]]) {
-    const el = $(id); if (el) { el.textContent = val; el.classList.toggle('hidden', !val); }
+    const el = $(id); if (el) { el.textContent = formatAmount(val); el.classList.toggle('hidden', !val); }
   }
 }
 
+function sectionHeaderHTML(title, link, count) {
+  return `<div class="section-header">
+    <h2 class="section-title"><span class="fire-icon">${icon('flame')}</span>${h(title)}</h2>
+    <span class="section-line" aria-hidden="true"></span>
+    ${count !== undefined ? `<span class="section-count">${formatAmount(count)} صنف</span>` : ''}
+    ${link ? `<a class="link" href="${h(link)}">شوف الكل ←</a>` : ''}
+  </div>`;
+}
+
 function itemCardHTML(it) {
-  const badge = it.featured ? `<span class="tag hot">★ الأكثر طلبًا</span>`
-    : it.cat === 'offers' ? `<span class="tag offer">عرض</span>` : '';
-  const priceHTML = it.noPrice ? `<span class="price small muted">عرض خاص</span>`
-    : `<span class="price">${it.priceLabel ? `<span class="small muted">${h(it.priceLabel)}</span> ` : ''}
-        ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${money(it.price)}</span>`;
+  const unavailable = it.available === false;
+  const badge = unavailable ? '<span class="tag off">نفد اليوم</span>'
+    : it.spicy ? '<span class="tag badge-hot">🔥 حار</span>'
+    : it.featured ? '<span class="tag hot">الأكثر طلبًا</span>'
+    : it.cat === 'offers' ? '<span class="tag offer">عرض</span>' : '';
+  const priceHTML = it.noPrice ? '<span class="price small">عرض خاص</span>'
+    : `<span class="price">${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}
+      ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(it.price)}</span>`;
   return `
-  <button class="card" data-act="item" data-id="${h(it.id)}">
-    <span class="thumb">${it.image ? `<img src="${h(it.image)}" alt="${h(it.name)}" loading="lazy">` : ''}${badge}</span>
-    <span class="body">
-      <h3>${h(it.name)}</h3>
-      ${it.desc ? `<span class="desc">${h(it.desc)}</span>` : ''}
-      <span class="foot">${priceHTML}<span class="add-btn">＋</span></span>
-    </span>
-  </button>`;
+  <article class="card menu-card" data-menu-id="${h(it.id)}">
+    <button class="card-img" data-act="item" data-id="${h(it.id)}" aria-label="تفاصيل ${h(it.name)}">
+      ${it.image ? `<img src="${h(it.image)}" alt="${h(it.name)}" loading="lazy" decoding="async" width="116" height="144">` : ''}${badge}
+    </button>
+    <div class="card-body">
+      <h3 class="card-title"><button data-act="item" data-id="${h(it.id)}">${h(it.name)}</button></h3>
+      ${it.desc ? `<p class="card-desc">${h(it.desc)}</p>` : ''}
+      <div class="card-footer">
+        ${priceHTML}
+        <button class="btn-add" data-act="item" data-id="${h(it.id)}" aria-label="${it.noPrice ? 'تفاصيل عرض' : 'أضف'} ${h(it.name)}${it.noPrice ? '' : ' إلى السلة'}" ${unavailable ? 'disabled' : ''}>${icon(it.noPrice ? 'chat' : 'plus')}</button>
+      </div>
+    </div>
+  </article>`;
 }
 
 /* ============================== ٧) صفحة الرئيسية ============================== */
@@ -267,114 +348,153 @@ function isOpenNow() {
   if (f === 'closed') return false;
   const hh = new Date().getHours() + new Date().getMinutes() / 60;
   const open = Number(S.openHour || 0), close = Number(S.closeHour || 24) % 24;
-  if (Number(S.closeHour) > 24) return hh >= open || hh < close;
+  if (Number(S.closeHour) >= 24) return hh >= open || hh < close;
   return hh >= open && hh < close;
 }
 
 function viewsHome() {
   const open = isOpenNow();
-  const featured = MENU.filter((i) => i.featured).slice(0, 8);
-  const glimpse = MENU.slice(0, 4);
+  const featured = MENU.filter((i) => i.featured).slice(0, 6);
   return `
   ${headerHTML('home')}
   <main class="app"><div class="wrap">
-    <section class="hero">
-      <img src="/img/ai-hero.jpg" alt="${h(S.name)}">
-      <div class="overlay"></div>
+    <section class="hero" aria-labelledby="homeTitle">
       <div class="content">
-        <span class="pill"><span class="dot ${open ? '' : 'closed'}"></span>${open ? `مفتوح الآن · توصيل خلال ${h(S.deliveryEta || '')}` : 'مقفول حاليًا'}</span>
-        <h1>مشاوي على الجمر بأصل الطعم</h1>
-        <p>لحوم طازجة تُتبّل كل صباح وتُشوى على الفحم لحظة الطلب. اطلب من المنيو وتابع طلبك خطوة بخطوة.</p>
+        <div class="eyebrow">${icon('flame')} THE ORIGINAL BBQ</div>
+        <h1 id="homeTitle">على الفحم.<br> <span>على أصوله.</span></h1>
+        <p>تتبيلة الأصلي، ورائحة الفحم اللي تعرفها.<br>اختار اللي نفسك فيه، وخلّي الباقي علينا.</p>
         <div class="btn-row">
-          <a class="btn btn-primary" href="#/menu">تصفح المنيو</a>
-          ${ME ? `<a class="btn btn-ghost" href="#/orders">طلباتي</a>` : `<a class="btn btn-ghost" href="#/login">تسجيل الدخول</a>`}
+          <a class="btn btn-primary" href="#/orders">اطلب دلوقتي ${icon('arrow')}</a>
+          <a class="btn btn-ghost" href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener">${icon('chat')} كلّمنا</a>
         </div>
+        <div class="hero-facts">
+          <span><span class="dot ${open ? '' : 'closed'}"></span>${open ? 'مفتوح الآن' : 'مقفول حاليًا'}</span>
+          ${S.deliveryEta ? `<span>${icon('clock')} توصيل خلال ${h(S.deliveryEta)}</span>` : ''}
+        </div>
+      </div>
+      <div class="hero-art">
+        <img src="/img/ai-hero.jpg" alt="تشكيلة مشاوي على الفحم مع الخبز والطحينة" width="900" height="600" fetchpriority="high">
+        <span class="grill-note">طعم الفحم البلدي</span>
       </div>
     </section>
 
-    <div class="section-head"><h2>تصنيفات المنيو</h2><a class="link" href="#/menu">الكل ←</a></div>
-    <div class="cats">
+    ${sectionHeaderHTML('لكل مزاج، طعم', '#/orders')}
+    <div class="cats" aria-label="تصنيفات المنيو">
       ${CATS.map((c) => `
         <button class="cat" data-act="cat" data-id="${h(c.id)}">
-          <span class="thumb">${c.image ? `<img src="${h(c.image)}" alt="">` : ''}<span class="emoji">${c.icon || '🍽️'}</span></span>
+          <span class="thumb">${c.image ? `<img src="${h(c.image)}" alt="" loading="lazy" width="92" height="78">` : ''}</span>
           <span class="label">${h(c.name)}</span>
         </button>`).join('')}
     </div>
 
-    <div class="section-head"><h2>الأكثر طلبًا</h2><a class="link" href="#/menu">كل المنيو ←</a></div>
-    <div class="grid">${featured.map(itemCardHTML).join('')}</div>
+    ${sectionHeaderHTML('اختيارات الناس', '#/orders?sort=hot')}
+    <div class="menu-grid">${featured.map(itemCardHTML).join('')}</div>
 
-    <div class="section-head"><h2>لمحة من المنيو</h2><a class="link" href="#/menu">المزيد ←</a></div>
-    <div class="grid wide">
-      ${glimpse.map((it) => `
-        <button class="card row-card" data-act="item" data-id="${h(it.id)}">
-          <span class="thumb">${it.image ? `<img src="${h(it.image)}" alt="" loading="lazy">` : ''}</span>
-          <span class="body"><h3>${h(it.name)}</h3><span class="desc">${h(it.desc || '')}</span>
-          <span class="price">${it.noPrice ? 'عرض خاص' : money(it.price)}</span></span>
-        </button>`).join('')}
-    </div>
-
-    <div class="section-head"><h2>ليه تطلب مننا؟</h2></div>
+    ${sectionHeaderHTML('ليه الأصلي؟')}
     <div class="perks">
-      <div class="perk"><div class="ico">⚡</div><h4>تحضير سريع</h4><p>طلبك يبدأ على الفحم بعد ثوانٍ من التأكيد</p></div>
-      <div class="perk"><div class="ico">📍</div><h4>تتبع مباشر</h4><p>تابع حالة طلبك من الاستلام لحد التوصيل</p></div>
-      <div class="perk"><div class="ico">💳</div><h4>دفع مرن</h4><p>${h((S.payments || []).map((p) => p.label).join(' أو '))}</p></div>
+      <div class="perk"><div class="ico">${icon('flame')}</div><h4>من الشواية لحد بابك</h4><p>مشاوي بتتجهّز على الفحم مع كل طلب.</p></div>
+      <div class="perk"><div class="ico">${icon('receipt')}</div><h4>خليك متابع طلبك</h4><p>من أول ما نستلمه، لحد ما يوصل بالهنا.</p></div>
+      <div class="perk"><div class="ico">${icon('cart')}</div><h4>اطلب على راحتك</h4><p>اختار إضافاتك، واكتب لنا اللي بتحبّه.</p></div>
     </div>
   </div>${footerHTML()}</main>`;
 }
 
-/* ============================== ٨) المنيو ============================== */
+/* ============================== ٨) صفحة الطلب / المنيو ============================== */
+const normalizeSearch = (text) => String(text).normalize('NFKD')
+  .replace(/[\u064B-\u065F\u0670]/g, '').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').toLowerCase();
+
 function viewsMenu(q) {
-  const catNameQ = q.get('cat');
-  const activeCat = catNameQ ? (CATS.find((c) => c.name === catNameQ) || {}).id : null;
+  const category = CATS.find((c) => c.name === q.get('cat') || c.id === q.get('cat'));
+  const activeCat = category ? category.id : null;
   const search = (q.get('q') || '').trim();
   const sort = q.get('sort') || 'rec';
+  const open = isOpenNow();
   let list = MENU.slice();
   if (activeCat) list = list.filter((i) => i.cat === activeCat);
-  if (search) list = list.filter((i) => (i.name + ' ' + (i.desc || '')).includes(search));
+  if (search) list = list.filter((i) => normalizeSearch(i.name + ' ' + (i.desc || '')).includes(normalizeSearch(search)));
   if (sort === 'cheap') list.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
   if (sort === 'pricey') list.sort((a, b) => (b.price ?? -1) - (a.price ?? -1));
   if (sort === 'hot') list.sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0));
 
+  const groupHTML = (title, items, id) => `<section class="menu-section" ${id ? `id="section-${h(id)}"` : ''}>
+    ${sectionHeaderHTML(title, null, items.length)}
+    <div class="menu-grid">${items.map(itemCardHTML).join('')}</div>
+  </section>`;
+  let results;
+  if (!list.length) {
+    results = `<div class="empty menu-empty"><div class="big">${icon('search')}</div><h3>مفيش أصناف بالاسم ده</h3><p>جرّب كلمة تانية، أو ارجع لكل المنيو.</p><button class="btn btn-primary btn-sm" data-act="clear-menu">شوف كل الأصناف</button></div>`;
+  } else if (!activeCat && !search && sort === 'rec') {
+    results = CATS.map((c) => {
+      const items = list.filter((i) => i.cat === c.id);
+      return items.length ? groupHTML(c.name, items, c.id) : '';
+    }).join('');
+    const other = list.filter((i) => !CATS.some((c) => c.id === i.cat));
+    if (other.length) results += groupHTML('أصناف أخرى', other);
+  } else {
+    results = groupHTML(search ? `نتائج «${search}»` : category ? category.name : sort === 'hot' ? 'الأكثر طلبًا' : 'كل الأصناف', list);
+  }
+
   return `
-  ${headerHTML('menu')}
-  <main class="app"><div class="wrap">
-    <div class="page-head">
-      <h1>المنيو</h1>
-      <p>${list.length} صنف${activeCat ? ` في «${h(catName(activeCat))}»` : ''}${search ? ` · نتيجة «${h(search)}»` : ''}</p>
+  ${headerHTML('orders')}
+  <main class="app ordering-page"><div class="wrap">
+    <div class="order-intro">
+      <div>
+        <div class="eyebrow">THE ORIGINAL MENU</div>
+        <h1>مشاوي على الفحم</h1>
+        <p>اختار اللي نفسك فيه، وإحنا نولّع الفحم.</p>
+        <div class="intro-details">
+          <span class="pill"><span class="dot ${open ? '' : 'closed'}"></span>${open ? 'مفتوح الآن' : 'مقفول حاليًا'}</span>
+          ${S.deliveryEta ? `<span>${icon('clock')} التوصيل خلال ${h(S.deliveryEta)}</span>` : ''}
+          <span id="menuResultCount" role="status" aria-live="polite">${formatAmount(list.length)} صنف${activeCat ? ` في ${h(catName(activeCat))}` : ''}</span>
+        </div>
+      </div>
+      <div class="menu-intro-media">
+        <img src="/img/ai-hero.jpg" alt="مشاوي من منيو الأصلي" width="330" height="172" fetchpriority="high">
+        <span class="grill-note">من الشواية إلى بابك</span>
+      </div>
     </div>
-    <div style="margin:12px 0 10px"><input id="searchInput" placeholder="ابحث عن صنف… (برجر، شيش، بطاطس)" value="${h(search)}"></div>
-    <div class="chips">
-      <button class="chip ${!activeCat ? 'active' : ''}" data-act="filter" data-id="">الكل</button>
-      ${CATS.map((c) => `<button class="chip ${activeCat === c.id ? 'active' : ''}" data-act="filter" data-id="${h(c.id)}">${c.icon || ''} ${h(c.name)}</button>`).join('')}
+    <div class="menu-controls">
+      <div class="menu-search">${icon('search')}<input id="searchInput" type="search" aria-label="ابحث في المنيو" placeholder="نفسك في إيه؟ ابحث هنا…" value="${h(search)}" autocomplete="off"></div>
+      <div class="menu-sort">
+        <label for="sortSel">ترتيب حسب</label>
+        <select id="sortSel" aria-label="ترتيب الأصناف">
+          <option value="rec" ${sort === 'rec' ? 'selected' : ''}>المقترح</option>
+          <option value="hot" ${sort === 'hot' ? 'selected' : ''}>الأكثر طلبًا</option>
+          <option value="cheap" ${sort === 'cheap' ? 'selected' : ''}>الأقل سعرًا</option>
+          <option value="pricey" ${sort === 'pricey' ? 'selected' : ''}>الأعلى سعرًا</option>
+        </select>
+      </div>
     </div>
-    <div class="section-head" style="margin-top:14px">
-      <span class="small muted">ترتيب حسب</span>
-      <select id="sortSel" style="width:auto;padding:8px 10px;font-size:13px">
-        <option value="rec" ${sort === 'rec' ? 'selected' : ''}>المقترح</option>
-        <option value="hot" ${sort === 'hot' ? 'selected' : ''}>الأكثر طلبًا</option>
-        <option value="cheap" ${sort === 'cheap' ? 'selected' : ''}>الأرخص</option>
-        <option value="pricey" ${sort === 'pricey' ? 'selected' : ''}>الأغلى</option>
-      </select>
+    <div class="tabs" role="group" aria-label="تصنيفات الأصناف">
+      <button class="tab ${!activeCat ? 'active' : ''}" data-act="filter" data-id="" aria-pressed="${!activeCat}">كل المنيو</button>
+      ${CATS.map((c) => `<button class="tab ${activeCat === c.id ? 'active' : ''}" data-act="filter" data-id="${h(c.id)}" aria-pressed="${activeCat === c.id}">${h(c.name)}</button>`).join('')}
     </div>
-    ${list.length ? `<div class="grid">${list.map(itemCardHTML).join('')}</div>`
-      : `<div class="empty"><div class="big">🔍</div><h3>مفيش نتائج</h3><p>جرّب كلمة تانية</p></div>`}
+    <div class="menu-results">${results}</div>
   </div>${footerHTML()}</main>`;
 }
 
 /* ============================== ٩) شيت الصنف ============================== */
 let sheet = { item: null, addons: [], qty: 1, note: '' };
+let sheetReturnFocus = null;
 
 function openSheet(id) {
   const it = byId(id); if (!it) return;
+  sheetReturnFocus = document.activeElement;
   sheet = { item: it, addons: [], qty: 1, note: '' };
   let bd = $('#sheet');
   if (!bd) { bd = document.createElement('div'); bd.id = 'sheet'; bd.className = 'sheet-backdrop'; document.body.appendChild(bd); }
-  bd.innerHTML = sheetHTML(); bd.classList.add('show');
+  bd.innerHTML = sheetHTML(); bd.classList.add('show'); bd.inert = false; bd.setAttribute('aria-hidden', 'false');
   bd.onclick = (e) => { if (e.target === bd || e.target.closest('[data-act="sheet-close"]')) closeSheet(); };
   document.body.style.overflow = 'hidden';
+  $('[data-act="sheet-close"]', bd)?.focus();
 }
-function closeSheet() { const bd = $('#sheet'); if (bd) bd.classList.remove('show'); document.body.style.overflow = ''; }
+function closeSheet() {
+  const bd = $('#sheet');
+  const wasOpen = bd?.classList.contains('show');
+  if (bd) { bd.classList.remove('show'); bd.inert = true; bd.setAttribute('aria-hidden', 'true'); }
+  document.body.style.overflow = '';
+  if (wasOpen && sheetReturnFocus?.isConnected) sheetReturnFocus.focus({ preventScroll: true });
+}
 
 function sheetHTML() {
   const it = sheet.item;
@@ -382,13 +502,13 @@ function sheetHTML() {
   const extras = sheet.addons.reduce((s, a) => s + a.price, 0);
   const total = ((it.price || 0) + extras) * sheet.qty;
   return `
-  <div class="sheet" role="dialog">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <div class="hero-img">
       ${it.image ? `<img src="${h(it.image)}" alt="${h(it.name)}">` : ''}
-      <button class="close" data-act="sheet-close">✕</button>
+      <button class="close" data-act="sheet-close" aria-label="إغلاق تفاصيل الصنف">✕</button>
     </div>
     <div class="content">
-      <h2>${h(it.name)}</h2>
+      <h2 id="sheetTitle">${h(it.name)}</h2>
       ${it.priceLabel ? `<div class="small muted">${h(it.priceLabel)}</div>` : ''}
       ${it.desc ? `<p class="muted small">${h(it.desc)}</p>` : ''}
       <div class="row" style="margin:8px 0 14px">
@@ -406,21 +526,21 @@ function sheetHTML() {
             <strong>إضافات اختيارية</strong>
             <div style="margin-top:8px">
               ${list.map((a, i) => `
-                <button class="opt ${sheet.addons.includes(a) ? 'on' : ''}" data-act="addon" data-i="${i}">
-                  <span><span class="tick">✓</span> ${h(a.name)}</span><span class="muted small">+ ${money(a.price)}</span>
+                <button class="opt ${sheet.addons.includes(a) ? 'on' : ''}" data-act="addon" data-i="${i}" aria-pressed="${sheet.addons.includes(a)}">
+                  <span><span class="tick" aria-hidden="true">✓</span> ${h(a.name)}</span><span class="muted small">+ ${money(a.price)}</span>
                 </button>`).join('')}
             </div>
           </div>` : ''}
         <div style="margin-bottom:14px">
-          <strong>ملاحظة (اختياري)</strong>
+          <label for="sheetNote" class="sheet-label">ملاحظة (اختياري)</label>
           <input id="sheetNote" placeholder="مثال: من غير مخلل…" value="${h(sheet.note)}" style="margin-top:8px">
         </div>
         <div class="row" style="justify-content:space-between">
-          <span class="qty"><button data-act="sheet-minus">−</button><span class="n">${sheet.qty}</span><button data-act="sheet-plus">+</button></span>
+          <span class="qty"><button data-act="sheet-minus" aria-label="تقليل الكمية">−</button><span class="n">${formatAmount(sheet.qty)}</span><button data-act="sheet-plus" aria-label="زيادة الكمية">+</button></span>
           <span class="small muted">سعر الوحدة ${money((it.price || 0) + extras)}</span>
         </div>
         <div class="sheet-foot">
-          <button class="btn btn-primary btn-block" data-act="sheet-add">أضف للسلة — ${money(total)}</button>
+          <button class="btn btn-primary btn-block" data-act="sheet-add" ${it.available === false ? 'disabled' : ''}>${it.available === false ? 'نفد اليوم' : 'أضف للسلة — ' + money(total)}</button>
         </div>`}
     </div>
   </div>`;
@@ -428,7 +548,11 @@ function sheetHTML() {
 function refreshSheet() {
   const bd = $('#sheet'); if (bd && bd.classList.contains('show')) {
     const n = $('#sheetNote'); if (n) sheet.note = n.value;
+    const focused = document.activeElement;
+    const action = focused?.getAttribute('data-act');
+    const index = focused?.getAttribute('data-i');
     bd.innerHTML = sheetHTML();
+    if (action) $$('[data-act]', bd).find((el) => el.getAttribute('data-act') === action && el.getAttribute('data-i') === index)?.focus();
   }
 }
 
@@ -438,14 +562,14 @@ function viewsCart() {
     return `${headerHTML('cart')}<main class="app"><div class="wrap">
       <div class="page-head"><h1>السلة</h1></div>
       <div class="empty"><div class="big">🛒</div><h3>سلتك فاضية</h3><p>اختار من المنيو وابدأ طلبك</p>
-      <a class="btn btn-primary" style="margin-top:14px" href="#/menu">تصفح المنيو</a></div>
+      <a class="btn btn-primary" style="margin-top:14px" href="#/orders">تصفح المنيو</a></div>
     </div>${footerHTML()}</main>`;
   }
   const t = cartTotals();
   const short = Math.max(0, Number(S.minOrder || 0) - t.subtotal);
   return `
   ${headerHTML('cart')}<main class="app"><div class="wrap">
-    <div class="page-head"><h1>السلة</h1><p>${cartCount()} صنف</p></div>
+    <div class="page-head"><h1>السلة</h1><p>${formatAmount(cartCount())} صنف</p></div>
     <div class="list" style="margin-top:14px">
       ${cart.map((c) => `
         <div class="box">
@@ -453,10 +577,10 @@ function viewsCart() {
             <div class="tbl-thumb" style="width:74px;height:74px">${c.image ? `<img src="${h(c.image)}" alt="">` : ''}</div>
             <div style="flex:1;min-width:0">
               <div class="row" style="justify-content:space-between"><strong>${h(c.name)}</strong>
-                <button class="muted" data-act="rm" data-key="${h(c.key)}">✕</button></div>
+                <button class="muted" data-act="rm" data-key="${h(c.key)}" aria-label="حذف ${h(c.name)} من السلة">✕</button></div>
               ${c.addons && c.addons.length ? `<div class="small muted">إضافات: ${h(c.addons.map((a) => a.name).join('، '))}</div>` : ''}
               <div class="row" style="justify-content:space-between;margin-top:10px">
-                <span class="qty"><button data-act="minus" data-key="${h(c.key)}">−</button><span class="n">${c.qty}</span><button data-act="plus" data-key="${h(c.key)}">+</button></span>
+                <span class="qty"><button data-act="minus" data-key="${h(c.key)}" aria-label="تقليل كمية ${h(c.name)}">−</button><span class="n">${formatAmount(c.qty)}</span><button data-act="plus" data-key="${h(c.key)}" aria-label="زيادة كمية ${h(c.name)}">+</button></span>
                 <span class="price">${money(lineTotal(c))}</span>
               </div>
               <div style="margin-top:10px"><input placeholder="ملاحظة على الصنف" value="${h(c.note || '')}" data-note="${h(c.key)}" style="padding:9px 12px;font-size:13px"></div>
@@ -485,7 +609,7 @@ function viewsCart() {
     <button class="btn btn-primary btn-block" style="margin-top:14px" data-act="nav" data-to="checkout" ${short > 0 ? 'disabled' : ''}>
       متابعة الطلب — ${money(t.total)}
     </button>
-    <a class="btn btn-ghost btn-block" style="margin-top:8px" href="#/menu">أضف أصناف تانية</a>
+    <a class="btn btn-ghost btn-block" style="margin-top:8px" href="#/orders">أضف أصناف تانية</a>
   </div>${footerHTML()}</main>`;
 }
 
@@ -503,12 +627,12 @@ function viewsCheckout() {
   }
   if (!cart.length) {
     return `${headerHTML('checkout')}<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
-      <div class="big">🛒</div><h3>السلة فاضية</h3><a class="btn btn-primary" style="margin-top:14px" href="#/menu">تصفح المنيو</a></div></div></main>`;
+      <div class="big">🛒</div><h3>السلة فاضية</h3><a class="btn btn-primary" style="margin-top:14px" href="#/orders">تصفح المنيو</a></div></div></main>`;
   }
   const t = cartTotals();
   return `
   ${headerHTML('checkout')}<main class="app"><div class="wrap">
-    <div class="page-head"><h1>إتمام الطلب</h1><p>${cartCount()} صنف · الإجمالي ${money(t.total)}</p></div>
+    <div class="page-head"><h1>إتمام الطلب</h1><p>${formatAmount(cartCount())} صنف · الإجمالي ${money(t.total)}</p></div>
     <form id="checkoutForm" class="list" style="margin-top:14px">
       <div class="box">
         <div class="grid2">
@@ -570,20 +694,20 @@ async function loadMyOrders(force) {
 
 function viewsOrders() {
   if (!ME) {
-    return `${headerHTML('orders')}<main class="app"><div class="wrap">
+    return `${headerHTML('my-orders')}<main class="app"><div class="wrap">
       <div class="empty" style="padding-top:60px"><div class="big">🔐</div><h3>سجّل الدخول</h3>
       <p>عشان تشوف طلباتك السابقة وتتابعها</p>
       <div class="btn-row" style="justify-content:center;margin-top:14px">
-        <a class="btn btn-primary" href="#/login?return=orders">تسجيل الدخول</a>
-        <a class="btn btn-ghost" href="#/signup?return=orders">إنشاء حساب</a>
+        <a class="btn btn-primary" href="#/login?return=my-orders">تسجيل الدخول</a>
+        <a class="btn btn-ghost" href="#/signup?return=my-orders">إنشاء حساب</a>
       </div></div></div></main>`;
   }
   const list = MY.orders;
   return `
-  ${headerHTML('orders')}<main class="app"><div class="wrap">
+  ${headerHTML('my-orders')}<main class="app"><div class="wrap">
     <div class="page-head"><h1>طلباتي</h1><p>${list.length} طلب مرتبط بحسابك (${h(ME.email)})</p></div>
     ${!list.length ? `<div class="empty"><div class="big">🧾</div><h3>مفيش طلبات لسه</h3>
-      <a class="btn btn-primary" style="margin-top:14px" href="#/menu">ابدأ طلبك</a></div>` : `
+      <a class="btn btn-primary" style="margin-top:14px" href="#/orders">ابدأ طلبك</a></div>` : `
     <div class="list" style="margin-top:14px">
       ${list.map((o) => `
         <button class="card" style="text-align:start" data-act="nav" data-to="order/${h(o.id)}">
@@ -624,17 +748,17 @@ function timelineHTML(o) {
 function viewOrderPage(id) {
   const o = MY.orders.find((x) => x.id === id);
   if (!o) {
-    return `${headerHTML('orders')}<main class="app"><div class="wrap">
+    return `${headerHTML('my-orders')}<main class="app"><div class="wrap">
       <div class="empty" style="padding-top:50px"><div class="big">⏳</div><h3>هنجيب الطلب…</h3></div>
-      <div class="center"><a class="btn btn-ghost" href="#/orders">كل الطلبات</a></div></div></main>`;
+      <div class="center"><a class="btn btn-ghost" href="#/my-orders">كل الطلبات</a></div></div></main>`;
   }
   const flow = FLOW();
   const idx = flow.findIndex((s) => s.id === o.status);
   const pct = o.status === 'cancelled' ? 100 : Math.round(((idx + 1) / flow.length) * 100);
   return `
-  ${headerHTML('orders')}<main class="app"><div class="wrap">
+  ${headerHTML('my-orders')}<main class="app"><div class="wrap">
     <div class="page-head">
-      <a class="small muted" href="#/orders">→ كل الطلبات</a>
+      <a class="small muted" href="#/my-orders">→ كل الطلبات</a>
       <h1>طلب ${h(o.id)}</h1><p>${h(fmtDT(o.createdAt))}</p>
     </div>
     <div class="box" style="margin-top:14px">
@@ -652,7 +776,7 @@ function viewOrderPage(id) {
       ${(o.payment_status === 'pending' || o.payment_status === 'failed') ? `
         <div class="btn-row" style="margin-top:10px">
           <button class="btn btn-primary btn-sm" data-act="pay-now" data-id="${h(o.id)}">ادفع الآن ${money(o.total)} 💳</button>
-          <a class="btn btn-ghost btn-sm" href="#/menu">الدفع عند الاستلام؟ كلمنا</a>
+          <a class="btn btn-ghost btn-sm" href="#/orders">الدفع عند الاستلام؟ كلمنا</a>
         </div>` : ''}
       ${o.refundedAt ? `<div class="small muted" style="margin-top:8px">تم إرجاع المبلغ بتاريخ ${h(fmtDT(o.refundedAt))}</div>` : ''}
     </div>
@@ -756,9 +880,9 @@ function viewsAccount() {
       <button class="btn btn-primary btn-block" style="margin-top:10px" type="submit">حفظ البيانات</button>
     </form>
     <div class="btn-row" style="margin-top:12px">
-      <a class="btn btn-ghost" href="#/orders">🧾 طلباتي</a>
+      <a class="btn btn-ghost" href="#/my-orders">🧾 طلباتي</a>
       ${staff ? `<a class="btn btn-ghost" href="#/admin">🧑‍🍳 لوحة الإدارة</a>` : ''}
-      <button class="btn btn-ghost" data-act="theme">${getTheme() === 'light' ? '☀️ الوضع الفاتح' : '🌙 الوضع الليلي'}</button>
+      <button class="btn btn-ghost" data-act="theme">${getTheme() === 'night' ? '🌙 الليل — فاتح' : '☀️ النهار — داكن'}</button>
       <button class="btn btn-danger" data-act="logout">تسجيل الخروج</button>
     </div>
   </div>${footerHTML()}</main>`;
@@ -953,7 +1077,9 @@ function adminMenuHTML() {
       </div>
       <div class="btn-row" style="margin-top:10px">
         <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="featured" ${e.featured ? 'checked' : ''}> الأكثر طلبًا</span><span></span></label>
-        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="active" ${e.active !== false ? 'checked' : ''}> متاح في المنيو</span><span></span></label>
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="spicy" ${e.spicy ? 'checked' : ''}> 🌶️ حار</span><span></span></label>
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="available" ${e.available !== false ? 'checked' : ''}> متوفر للطلب</span><span></span></label>
+        <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="active" ${e.active !== false ? 'checked' : ''}> ظاهر في المنيو</span><span></span></label>
         <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="noPrice" ${e.noPrice ? 'checked' : ''}> عرض (زرار واتساب)</span><span></span></label>
       </div>
       <div class="row" style="margin-top:12px;gap:8px">
@@ -1257,17 +1383,19 @@ function adminSettingsHTML() {
 }
 
 /* ============================== ١٤) نافذة تفاصيل الطلب (للإدارة) ============================== */
+let drawerReturnFocus = null;
 function openOrderDrawer(id) {
   const o = AD.orders.find((x) => x.id === id) || MY.orders.find((x) => x.id === id);
   if (!o) return;
+  drawerReturnFocus = document.activeElement;
   let bd = $('#drawer');
   if (!bd) { bd = document.createElement('div'); bd.id = 'drawer'; bd.className = 'drawer-backdrop'; document.body.appendChild(bd); }
   const flow = FLOW();
   bd.innerHTML = `
-  <div class="drawer">
+  <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
     <div class="dhead">
-      <strong style="flex:1">طلب ${h(o.id)}</strong>
-      <button class="icon-btn" data-act="drawer-close">✕</button>
+      <strong id="drawerTitle" style="flex:1">طلب ${h(o.id)}</strong>
+      <button class="icon-btn" data-act="drawer-close" aria-label="إغلاق تفاصيل الطلب">✕</button>
     </div>
     <div class="dbody">
       <div class="row" style="justify-content:space-between">${statusChip(o.status)}<span class="small muted">${h(fmtDT(o.createdAt))}</span></div>
@@ -1328,11 +1456,18 @@ function openOrderDrawer(id) {
       </div>
     </div>
   </div>`;
-  bd.classList.add('show');
+  bd.classList.add('show'); bd.inert = false; bd.setAttribute('aria-hidden', 'false');
+  $('[data-act="drawer-close"]', bd)?.focus();
   bd.onclick = (e) => { if (e.target === bd || e.target.closest('[data-act="drawer-close"]')) closeDrawer(); };
   document.body.style.overflow = 'hidden';
 }
-function closeDrawer() { const bd = $('#drawer'); if (bd) bd.classList.remove('show'); document.body.style.overflow = ''; }
+function closeDrawer() {
+  const bd = $('#drawer');
+  const wasOpen = bd?.classList.contains('show');
+  if (bd) { bd.classList.remove('show'); bd.inert = true; bd.setAttribute('aria-hidden', 'true'); }
+  document.body.style.overflow = '';
+  if (wasOpen && drawerReturnFocus?.isConnected) drawerReturnFocus.focus({ preventScroll: true });
+}
 
 /* ============================== ١٥) الإشعارات ============================== */
 function renderNotifPanel() {
@@ -1358,7 +1493,7 @@ async function loadNotifs() {
     const d = await api.req('/api/notifications');
     NOTIFS = d.notifications;
     const btn = $('#notifBtn');
-    if (btn) { const unread = NOTIFS.filter((n) => !n.read).length; btn.innerHTML = `🔔${unread ? `<span class="badge-n red">${unread}</span>` : ''}`; }
+    if (btn) { const unread = NOTIFS.filter((n) => !n.read).length; btn.innerHTML = `${icon('bell')}${unread ? `<span class="badge-n red">${formatAmount(unread)}</span>` : ''}`; }
     if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
   } catch { /* ignore */ }
 }
@@ -1396,9 +1531,9 @@ function connectSSE() {
         MY.loaded = false;
         await loadMyOrders(true);
         const r = parseHash();
-        if (r.name === 'orders') softRender();
+        if (r.name === 'my-orders') softRender();
         if (r.name === 'order' && r.param === d.orderId) softRender();
-        if (MY.orders.some((o) => o.id === d.orderId) && ['orders', 'order'].includes(r.name)) toast('تم تحديث حالة طلبك ✅');
+        if (MY.orders.some((o) => o.id === d.orderId) && ['my-orders', 'order'].includes(r.name)) toast('تم تحديث حالة طلبك ✅');
       }
     };
     es.onerror = () => {
@@ -1423,7 +1558,7 @@ function startPolling(ms = 20000) {
     try {
       const r = parseHash();
       if (isStaff()) await loadNotifs();
-      if (['orders', 'order'].includes(r.name) && ME) {
+      if (['my-orders', 'order'].includes(r.name) && ME) {
         const before = MY.orders.map((o) => o.id + ':' + o.status).join('|');
         await loadMyOrders(true);
         const after = MY.orders.map((o) => o.id + ':' + o.status).join('|');
@@ -1436,7 +1571,15 @@ function startPolling(ms = 20000) {
 
 /* ============================== ١٧) الرسم والأحداث ============================== */
 function softRender() { render({ soft: true }); }
-function softRefreshAdmin() { const b = $('#adminBody'); if (b && parseHash().name === 'admin') b.innerHTML = adminBodyFor(AD.tab); }
+function softRefreshAdmin() {
+  const b = $('#adminBody');
+  const route = parseHash();
+  if (b && route.name === 'admin') {
+    b.innerHTML = adminBodyFor(AD.tab);
+    // Replaced forms need fresh listeners; delegated buttons alone do not handle submission.
+    bindPage(route);
+  }
+}
 function adminBodyFor(tab) {
   if (tab === 'dash') return adminDashHTML();
   if (tab === 'orders') return adminOrdersHTML();
@@ -1454,7 +1597,7 @@ async function render(opts = {}) {
   const view = $('#view');
 
   /* تحميل البيانات المطلوبة للصفحة */
-  if (r.name === 'orders' || r.name === 'order' || r.name === 'account') await loadMyOrders();
+  if (r.name === 'my-orders' || r.name === 'order' || r.name === 'account') await loadMyOrders();
 
   /* رجعنا من صفحة الدفع؟ نتأكد من المزوّد نفسه (مش بنعتمد على الرابط لوحده) */
   if (r.name === 'order' && r.q.get('pay') && ME) {
@@ -1478,10 +1621,10 @@ async function render(opts = {}) {
 
   let html = '';
   if (r.name === 'home') html = viewsHome();
-  else if (r.name === 'menu') html = viewsMenu(r.q);
+  else if (r.name === 'menu' || r.name === 'orders') html = viewsMenu(r.q);
   else if (r.name === 'cart') html = viewsCart();
   else if (r.name === 'checkout') html = viewsCheckout();
-  else if (r.name === 'orders') html = viewsOrders();
+  else if (r.name === 'my-orders') html = viewsOrders();
   else if (r.name === 'order') html = viewOrderPage(r.param);
   else if (r.name === 'account') html = viewsAccount();
   else if (r.name === 'login') html = authPageHTML('login', r.q);
@@ -1499,23 +1642,31 @@ async function render(opts = {}) {
   else html = `<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
     <div class="big">🧭</div><h3>الصفحة غير موجودة</h3><a class="btn btn-primary" style="margin-top:14px" href="#/">الرئيسية</a></div></div></main>`;
 
-  view.innerHTML = html + navHTML(r.name === 'order' ? 'orders' : r.name);
+  view.innerHTML = html + navHTML(r.name === 'order' ? 'my-orders' : r.name === 'menu' ? 'orders' : r.name);
   if (!opts.soft || opts.scroll) window.scrollTo({ top: 0 });
-  renderCartBar(); updateBadges(); bindPage(r);
+  renderCartBar(); updateBadges(); bindPage(r); updateThemeControls();
 }
 
 /* ============================== ١٨) ربط عناصر الصفحة ============================== */
 function bindPage(r) {
+  // Associate the existing form labels without changing their names or submission contracts.
+  $$('label.lbl').forEach((label, index) => {
+    const input = label.nextElementSibling;
+    if (input?.matches('input, select, textarea') && !label.htmlFor) {
+      if (!input.id) input.id = `field-${index}`;
+      label.htmlFor = input.id;
+    }
+  });
   const si = $('#searchInput');
   if (si) {
     let t;
     si.addEventListener('input', () => {
       clearTimeout(t);
-      t = setTimeout(() => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('q', si.value); go('menu?' + q); }, 350);
+      t = setTimeout(() => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('q', si.value); go('orders?' + q); }, 350);
     });
   }
   const ss = $('#sortSel');
-  if (ss) ss.addEventListener('change', () => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('sort', ss.value); go('menu?' + q); });
+  if (ss) ss.addEventListener('change', () => { const q = new URLSearchParams(location.hash.split('?')[1] || ''); q.set('sort', ss.value); go('orders?' + q); });
 
   $$('input[data-note]').forEach((inp) => inp.addEventListener('change', () => {
     const c = cart.find((x) => x.key === inp.getAttribute('data-note'));
@@ -1617,7 +1768,8 @@ function bindPage(r) {
         price: fd.get('price') === '' ? null : Number(fd.get('price')),
         oldPrice: fd.get('oldPrice') === '' ? null : Number(fd.get('oldPrice')),
         priceLabel: fd.get('priceLabel'),
-        featured: fd.get('featured') != null, active: fd.get('active') != null, noPrice: fd.get('noPrice') != null,
+        featured: fd.get('featured') != null, spicy: fd.get('spicy') != null, available: fd.get('available') != null,
+        active: fd.get('active') != null, noPrice: fd.get('noPrice') != null,
       };
       try {
         const id = fd.get('id');
@@ -1794,12 +1946,13 @@ document.addEventListener('click', async (e) => {
   switch (act) {
     case 'theme': toggleTheme(); break;
     case 'nav': go(el.getAttribute('data-to')); break;
-    case 'cat': { const c = CATS.find((x) => x.id === id); go('menu?cat=' + encodeURIComponent(c ? c.name : '')); break; }
+    case 'cat': { const c = CATS.find((x) => x.id === id); go('orders?cat=' + encodeURIComponent(c ? c.name : '')); break; }
+    case 'clear-menu': go('orders'); break;
     case 'filter': {
       const c = CATS.find((x) => x.id === id);
       const q = new URLSearchParams(location.hash.split('?')[1] || '');
       c ? q.set('cat', c.name) : q.delete('cat');
-      go('menu?' + q);
+      go('orders?' + q);
       break;
     }
     case 'item': openSheet(id); break;
@@ -2061,23 +2214,62 @@ document.addEventListener('change', async (e) => {
   } catch (err) { toast(err.message, 3500); AD.users = (await api.req('/api/admin/users')).users; softRefreshAdmin(); }
 });
 
-window.addEventListener('hashchange', () => { closeSheet(); closeDrawer(); render({ scroll: true }); });
+window.addEventListener('hashchange', async (event) => {
+  const menuRoute = (url) => /^#\/(orders|menu)(?:\?|$)/.test(new URL(url).hash);
+  const filtering = menuRoute(event.oldURL) && menuRoute(event.newURL);
+  const search = document.activeElement && document.activeElement.id === 'searchInput' ? document.activeElement : null;
+  const caret = search ? search.selectionStart : null;
+  closeSheet(); closeDrawer();
+  await render({ soft: filtering, scroll: !filtering });
+  if (search) {
+    const input = $('#searchInput');
+    if (input) { input.focus({ preventScroll: true }); if (caret !== null) input.setSelectionRange(caret, caret); }
+  }
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { closeSheet(); closeDrawer(); $('#notifPanel')?.classList.add('hidden'); }
+  if (event.key === 'Tab') {
+    const dialog = $('#sheet.show .sheet') || $('#drawer.show .drawer');
+    if (!dialog) return;
+    const elements = $$('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]', dialog)
+      .filter((el) => el.getClientRects().length);
+    const first = elements[0], last = elements[elements.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
+});
+
+$('#skipLink')?.addEventListener('click', () => {
+  const main = $('#view main');
+  if (main) { main.tabIndex = -1; main.focus(); }
+});
 
 /* ============================== ٢١) التشغيل ============================== */
+function finishSplash() {
+  const splash = $('#splash');
+  if (!splash) return;
+  splash.classList.add('is-ready');
+  setTimeout(() => splash.remove(), 220);
+}
+
 (async function boot() {
   try {
     await loadBootstrap();
+    await render({ force: true, scroll: true });
   } catch (e) {
-    document.getElementById('view').innerHTML = `<div class="empty" style="padding-top:80px">
-      <div class="big">🔌</div><h3>مش قادر أوصل للسيرفر</h3>
-      <p>تأكد من تشغيل السيرفر أو اكتمال النشر على Vercel ثم اضغط إعادة المحاولة</p>
-      <div style="margin-top:16px"><button class="btn pri" onclick="location.reload()">إعادة المحاولة 🔄</button></div></div>`;
+    $('#view').innerHTML = `${headerHTML('home')}<main class="app"><div class="wrap empty" style="padding-top:60px">
+      <div class="big">🔌</div><h1>مش قادرين نوصل للمطعم</h1>
+      <p>تأكد من اتصالك بالإنترنت ومن تشغيل السيرفر، وجرّب تاني.</p>
+      <button class="btn btn-primary" onclick="location.reload()">إعادة المحاولة</button>
+    </div></main>`;
     return;
+  } finally {
+    finishSplash();
   }
-  await render({ force: true, scroll: true });
   if (ME) {
     await loadNotifs();
-    if (S.realtime === false) startPolling(20000);     // استضافة سيرفرلس → تحديث دوري
-    else { connectSSE(); setInterval(() => { if (isStaff()) loadNotifs(); }, 30000); }   // احتياطي لو SSE قفل
+    if (S.realtime === false) startPolling(20000);
+    else { connectSSE(); setInterval(() => { if (isStaff()) loadNotifs(); }, 30000); }
   }
 })();
