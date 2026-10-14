@@ -258,6 +258,11 @@ test('serverless storage/owner misconfiguration fails closed and never writes te
     const w = await worker(t, { VERCEL: '1', STORAGE: storage, BBQ_DATA_DIR: dataDir });
     const r = await w.req('GET', '/api/health');
     assert.equal(r.status, 503); assert.equal(r.data.code, 'STORAGE_UNAVAILABLE');
+    /* الـ503 بيشرح نفسه: تقرير تشخيص عام + سبب واضح، من غير أي قيمة سرية. */
+    assert.ok(r.data.setup && r.data.setup.serverless === true, '503 carries a public setup report');
+    assert.ok(r.data.setup.missing.includes('UPSTASH_REDIS_REST_URL') && r.data.setup.missing.includes('UPSTASH_REDIS_REST_TOKEN'), 'missing lists the Redis credentials');
+    assert.ok((r.data.detail || '').includes('Upstash'), '503 carries the human-readable reason');
+    assert.ok(!JSON.stringify(r.data).includes(PASSWORD), 'setup report never leaks secret values');
     assert.equal(fs.existsSync(dataDir), false);
     assert.equal((await w.req('POST', '/api/auth/signup', { body: CLIENT })).status, 503);
     await w.stop();
@@ -265,6 +270,8 @@ test('serverless storage/owner misconfiguration fails closed and never writes te
   const w = await worker(t, { BBQ_DATA_DIR: path.join(dir, 'no-owner'), BBQ_UPLOAD_DIR: path.join(dir, 'uploads'), ADMIN_PASSWORD: '' });
   const r = await w.req('GET', '/api/bootstrap');
   assert.equal(r.status, 503); assert.equal(r.data.code, 'OWNER_NOT_CONFIGURED');
+  assert.ok(r.data.setup && r.data.setup.missing.includes('ADMIN_PASSWORD'), 'missing lists ADMIN_PASSWORD');
+  assert.ok((r.data.detail || '').includes('ADMIN_PASSWORD'), 'reason mentions ADMIN_PASSWORD');
   assert.equal(fs.existsSync(path.join(dir, 'no-owner', 'database.json')), false);
 });
 

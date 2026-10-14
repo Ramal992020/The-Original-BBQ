@@ -1017,6 +1017,12 @@ function serveStatic(req, res, url) {
 }
 
 /* ============================== السيرفر ============================== */
+/* رسالة 503 للإعداد الناقص: جملة عامة للعميل + السبب الواضح لصاحب المطعم + تقرير تشخيص آمن. */
+const SETUP_DETAIL = {
+  STORAGE_UNAVAILABLE: 'السبب: قاعدة البيانات الدائمة (Upstash Redis) مش متوصلة — راجع UPSTASH_REDIS_REST_URL وUPSTASH_REDIS_REST_TOKEN في متغيرات البيئة على الاستضافة واعمل Redeploy.',
+  OWNER_NOT_CONFIGURED: 'السبب: حساب صاحب المطعم مش مجهّز — أضف ADMIN_PASSWORD (أو ADMIN_PASSWORD_HASH) في متغيرات البيئة على الاستضافة واعمل Redeploy.',
+};
+
 function sendJSON(res, code, data) {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));
@@ -1045,7 +1051,9 @@ async function handle(req, res) {
     sendJSON(res, unavailable ? 503 : (e.status || 500), {
       error: unavailable ? 'خدمة التسجيل والطلبات غير متاحة مؤقتًا — المطعم محتاج يراجع إعدادات قاعدة البيانات والحساب. لم يتم تأكيد الطلب.'
         : e.message === 'too_large' ? 'الملف كبير جدًا (الحد 12 ميجا)' : e.status ? e.message : 'خطأ في السيرفر',
-      ...(unavailable ? { code: e.code } : {}),
+      /* التشخيص العام (أسماء المتغيرات الناقصة فقط، من غير قيم سرية) بيخلّي صفحة
+         #/setup و /api/health يشرحوا الإصلاح بالظبط بدل صفحة «مش قادرين نوصل». */
+      ...(unavailable ? { code: e.code, detail: SETUP_DETAIL[e.code] || '', setup: deployEnv.publicReport() } : {}),
     });
   }
 }

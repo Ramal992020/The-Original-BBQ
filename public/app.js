@@ -118,7 +118,11 @@ const api = {
     catch (err) { if (err.name === 'AbortError') throw err; throw new Error('الاتصال بالمطعم انقطع — جرّب تاني. إعادة المحاولة لن تكرر نفس الطلب.'); }
     let data = {};
     try { data = await res.json(); } catch { throw new Error('تعذر الحصول على رد صحيح من المطعم — جرّب لاحقًا'); }
-    if (!res.ok) { const e = new Error(data.error || ('خطأ ' + res.status)); e.status = res.status; throw e; }
+    if (!res.ok) {
+      const e = new Error(data.error || ('خطأ ' + res.status));
+      e.status = res.status; e.code = data.code; e.detail = data.detail; e.setup = data.setup;
+      throw e;
+    }
     return data;
   },
 };
@@ -144,6 +148,53 @@ async function loadBootstrap() {
     S = d.settings; CATS = d.categories; MENU = d.menu; ME = d.user;
     if (!ME && api.token) api.setToken('');
   } finally { clearTimeout(timeout); }
+}
+
+/* ============================== ٣٫٥) صفحة إصلاح الإعداد الناقص ==============================
+   لما السيرفر يقفل كل الـAPI برسالة 503 (STORAGE_UNAVAILABLE / OWNER_NOT_CONFIGURED)
+   الصفحة القديمة كانت بتقول «مش قادرين نوصل للمطعم / تأكد من الإنترنت» — وده تضليل.
+   هنا بنعرض السبب الحقيقي وخطوات الإصلاح على الاستضافة (Vercel/Upstash) بالصوت والصورة. */
+let lastSetupError = null;
+const SETUP_CODES = ['STORAGE_UNAVAILABLE', 'OWNER_NOT_CONFIGURED'];
+const isSetupError = (e) => !!e && SETUP_CODES.includes(e.code);
+
+function setupStepsHTML(code) {
+  const steps = code === 'STORAGE_UNAVAILABLE' ? [
+    'افتح <a href="https://upstash.com" target="_blank" rel="noopener" style="color:var(--link)">upstash.com</a> وأنشئ قاعدة Redis مجانية (Upstash Redis).',
+    'من صفحة القاعدة انسخ <b>REST URL</b> و<b>REST Token</b> — الرابط لازم يبدأ بـ <code dir="ltr">https://</code> (رابط <code dir="ltr">redis://</code> مش هيشتغل).',
+    'على Vercel: المشروع → <b>Settings → Environment Variables</b> → أضف <code dir="ltr">UPSTASH_REDIS_REST_URL</code> و<code dir="ltr">UPSTASH_REDIS_REST_TOKEN</code> وفعّلهم لـ Production وPreview.',
+    'اعمل <b>Redeploy</b> من تبويب Deployments لآخر نسخة — المتغيرات بتتقرأ مع النشر مش مع التصفح.',
+  ] : [
+    'على Vercel: المشروع → <b>Settings → Environment Variables</b> → أضف <code dir="ltr">ADMIN_PASSWORD</code> (٦ أحرف على الأقل) — واختياريًا <code dir="ltr">ADMIN_EMAIL</code> لإيميل صاحب المطعم.',
+    'لو المتغير موجود بالفعل ومتأكد من قيمته، اعمل <b>Redeploy</b> — الإضافة بعد النشر مش بتسري إلا بنشر جديد.',
+  ];
+  return `<ol style="margin:10px 0 0;padding-inline-start:22px;line-height:2.1">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>`;
+}
+
+function setupPageHTML() {
+  const code = lastSetupError?.code || '';
+  const setup = lastSetupError?.setup || null;
+  const chips = (list) => (list || []).map((k) => `<code dir="ltr">${h(k)}</code>`).join('، ');
+  return `${headerHTML('home')}<main class="app"><div class="wrap" style="max-width:640px">
+    <div class="page-head"><h1>إعدادات الاستضافة ناقصة</h1>
+      <p>الموقع منشور وشغال، بس السيرفر بيقفل التسجيل والطلبات لأن متغيرات البيئة الإجبارية مش متظبطة${code ? ` (<code dir="ltr">${h(code)}</code>)` : ''}.</p></div>
+    <div class="box" style="margin-top:14px;border-color:color-mix(in srgb, var(--danger, #c22) 45%, transparent)">
+      <strong>🛠️ إصلاح المشكلة (لصاحب المطعم)</strong>
+      ${lastSetupError?.detail ? `<p class="small" style="margin:8px 0 0">${h(lastSetupError.detail)}</p>` : ''}
+      ${code ? setupStepsHTML(code) : '<p class="small muted" style="margin:8px 0 0">افتح <code dir="ltr">/api/health</code> عشان تشوف المتغيرات الناقصة بالظبط.</p>'}
+      ${setup && setup.missing && setup.missing.length ? `<p class="small" style="margin:10px 0 0">الناقص حاليًا: ${chips(setup.missing)}</p>` : ''}
+      ${setup && setup.invalid && setup.invalid.length ? `<p class="small" style="margin:6px 0 0">قيم محتاجة تصحيح: ${chips(setup.invalid)}</p>` : ''}
+      <p class="small muted" style="margin:10px 0 0">بعد الإصلاح افتح <code dir="ltr">/api/health</code> ولازم تلاقي <code dir="ltr">ok:true</code> — الشرح الكامل خطوة بخطوة في ملف المشروع <code dir="ltr">docs/VERCEL-UPSTASH.md</code>.</p>
+      <div class="btn-row" style="margin-top:12px">
+        <a class="btn btn-ghost" dir="ltr" href="/api/health" target="_blank" rel="noopener">/api/health فتح</a>
+        <button class="btn btn-primary" onclick="location.reload()">إعادة المحاولة</button>
+      </div>
+    </div>
+    <div class="box" style="margin-top:12px">
+      <strong>لو أنت عميل:</strong>
+      <p class="small muted" style="margin:6px 0 0">التوقف من جهة المطعم نفسه — مش مشكلة في جهازك ولا في اتصالك بالإنترنت. أول ما المطعم يظبط إعداداته هتقدر تسجّل وتطلب عادي، ومفيش أي خطوة مطلوبة منك.</p>
+    </div>
+  </div>${footerHTML()}</main>`;
 }
 
 /* بحث عن الأصناف المستوردة اللي مش عندها صورة (للأدمن) */
@@ -1760,6 +1811,7 @@ async function render(opts = {}) {
         <div class="center small muted" style="margin-top:10px"><a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a></div>
       </form></div>${footerHTML()}</main>`;
   else if (r.name === 'reset') html = authPageHTML('reset', r.q);
+  else if (r.name === 'setup') html = setupPageHTML();
   else if (r.name === 'admin') html = viewsAdmin(r.q);
   else html = `<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
     <div class="big">🧭</div><h3>الصفحة غير موجودة</h3><a class="btn btn-primary" style="margin-top:14px" href="#/">الرئيسية</a></div></div></main>`;
@@ -2039,7 +2091,17 @@ async function submitAccountForm(form, work) {
   if (error) { error.hidden = true; error.textContent = ''; }
   if (btn) { btn.disabled = true; btn.textContent = 'جاري الحفظ…'; }
   try { await work(); }
-  catch (err) { if (error) { error.textContent = err.message; error.hidden = false; } toast(err.message, 4000); }
+  catch (err) {
+    if (error) {
+      if (isSetupError(err)) {
+        /* قفل إعدادات الاستضافة: نفس الرسالة + رابط مباشر لصفحة خطوات الإصلاح. */
+        lastSetupError = err;
+        error.innerHTML = `${h(err.message)} <a href="#/setup" style="color:var(--link)">— شاهد خطوات الإصلاح</a>`;
+      } else { error.textContent = err.message; }
+      error.hidden = false;
+    }
+    toast(err.message, 4000);
+  }
   finally {
     form.dataset.busy = ''; form.removeAttribute('aria-busy');
     if (btn) { btn.disabled = false; btn.textContent = label; }
@@ -2446,6 +2508,12 @@ function finishSplash() {
     await loadBootstrap();
     await render({ force: true, scroll: true });
   } catch (e) {
+    if (isSetupError(e)) {
+      /* الإعداد الناقص مش «انترنت واقع» — بنعرض صفحة الإصلاح المخصصة. */
+      lastSetupError = e;
+      $('#view').innerHTML = setupPageHTML();
+      return;
+    }
     $('#view').innerHTML = `${headerHTML('home')}<main class="app"><div class="wrap empty" style="padding-top:60px">
       <div class="big">🔌</div><h1>مش قادرين نوصل للمطعم</h1>
       <p>${h(e.message || 'تأكد من اتصالك بالإنترنت ومن تشغيل السيرفر، وجرّب تاني.')}</p>

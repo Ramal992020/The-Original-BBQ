@@ -176,7 +176,8 @@ curl https://<YOUR-URL>/ping -H "Authorization: Bearer <YOUR-TOKEN>"
 | المتغيرات متظبطة بس مش بتأثر | نسيت Redeploy / محددة على Preview بس | فعّل **Production** → **Redeploy** |
 | Vercel سوق Upstash حط أسماء `KV_*` | أسماء مختلفة | ضيف `UPSTASH_REDIS_REST_URL/TOKEN` بنفس القيم |
 | البيانات بتختفي بعد كل Deploy | لسه مش `redis` | نفس الحل الأول → وبعدها `"persistent":true` |
-| مش عارف إيه الناقص بالظبط | — | `npm run check:env -- --vercel` أو تبويب 🛠️ النظام |
+| مش عارف إيه الناقص بالظبط | — | افتح `/api/health` — حقل `setup.missing` بيقول الناقص بالاسم، أو صفحة `#/setup` جوه التطبيق، أو `npm run check:env -- --vercel` |
+| الموقع بيقول «مش قادرين نوصل للمطعم» أو «خدمة التسجيل غير متاحة مؤقتًا» | الإعداد ناقص والسيرفر بيقفل كل الـAPI | التطبيق بيعرض صفحة `#/setup` بخطوات الإصلاح بنفسه؛ أكّد السبب من `/api/health` وظبّط المتغيرات → Redeploy |
 
 ---
 
