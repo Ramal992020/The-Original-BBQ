@@ -563,15 +563,15 @@ declare
   service_roles text[] := '{}';
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    public_roles := public_roles || 'anon';
+    public_roles := array_append(public_roles, 'anon'::text);
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    public_roles := public_roles || 'authenticated';
+    public_roles := array_append(public_roles, 'authenticated'::text);
   end if;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    service_roles := service_roles || 'service_role';
+    service_roles := array_append(service_roles, 'service_role'::text);
   end if;
-  service_roles := service_roles || 'postgres';
+  service_roles := array_append(service_roles, 'postgres'::text);
 
   foreach t in array array[
     'bbq_lock', 'bbq_users', 'bbq_sessions', 'bbq_password_reset_tokens',
