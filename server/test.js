@@ -12,6 +12,19 @@ const path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'bbq-test-'));
 process.env.BBQ_DATA_DIR = path.join(TMP, 'data');
 process.env.BBQ_UPLOAD_DIR = path.join(TMP, 'uploads');
+process.env.BBQ_ENV_FILE = '';
+process.env.STORAGE = 'file';
+process.env.ADMIN_EMAIL = 'aliielramal@gmail.com';
+process.env.ADMIN_PASSWORD = 'test-owner-password';
+process.env.SEED_DEMO = '1';
+process.env.DEMO_LOGIN = '1';
+process.env.ALLOW_DEMO_PAYMENTS = '1';
+process.env.ALLOW_CONSOLE_MAIL = '1';
+delete process.env.ADMIN_PASSWORD_HASH;
+delete process.env.VERCEL;
+delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+delete process.env.RESEND_API_KEY;
+process.env.NODE_ENV = 'test';
 
 const { server } = require('./index');
 
@@ -72,7 +85,7 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('أي مستخدم جديد = Customer تلقائيًا', newUser.data.user.role === 'customer');
   const newTok = newUser.data.token;
 
-  const dup = await req('POST', '/api/auth/signup', { body: { name: 'x', email: 'new@bbq.app', password: 'secret123' } });
+  const dup = await req('POST', '/api/auth/signup', { body: { name: 'مكرر', email: 'new@bbq.app', password: 'secret123' } });
   check('إيميل مكرر مرفوض (409)', dup.status === 409);
 
   /* ---------------------------- 3) صلاحيات الإدارة ---------------------------- */
@@ -301,9 +314,9 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   const forgot = await req('POST', '/api/auth/forgot', { body: { email: 'demo@bbq.app' } });
   check('طلب استعادة كلمة السر', forgot.status === 200);
-  const { all } = require('./store');
-  const rtoken = all('password_reset_tokens').slice(-1)[0];
-  const resetRes = await req('POST', '/api/auth/reset', { body: { token: rtoken.token, password: 'newpass123' } });
+  const resetMessage = require('./mail').outbox().find((m) => m.to === 'demo@bbq.app');
+  const resetToken = /token=([a-f0-9]{64})/.exec(resetMessage.text)[1];
+  const resetRes = await req('POST', '/api/auth/reset', { body: { token: resetToken, password: 'newpass123' } });
   check('تعيين كلمة سر جديدة بالتوكن', resetRes.status === 200);
   const newLogin = await req('POST', '/api/auth/login', { body: { email: 'demo@bbq.app', password: 'newpass123' } });
   check('الدخول بكلمة السر الجديدة', newLogin.status === 200);

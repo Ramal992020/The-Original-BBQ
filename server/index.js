@@ -6,6 +6,8 @@
    - إشعارات فورية للـAdmin/Supervisor عبر SSE (Server-Sent Events).
    ========================================================================== */
 'use strict';
+require('./env').load();
+const crypto = require('crypto');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -32,8 +34,7 @@ function ensureReady() {
   if (!readyPromise) {
     readyPromise = (async () => {
       await store.init();
-      seed.seed();
-      await store.idle();
+      await store.transaction(() => seed.seed());
       return true;
     })().catch((e) => {
       readyPromise = null;
@@ -50,6 +51,13 @@ const isInside = (parent, child) => {
 };
 
 function readBody(req, limit = 12 * 1024 * 1024) {
+  // Some serverless runtimes supply the raw body after consuming the stream.
+  const supplied = req.rawBody ?? (Buffer.isBuffer(req.body) || typeof req.body === 'string' ? req.body : undefined);
+  if (supplied !== undefined) {
+    const buffer = Buffer.isBuffer(supplied) ? supplied : Buffer.from(String(supplied));
+    return buffer.length > limit ? Promise.reject(new Error('too_large')) : Promise.resolve(buffer);
+  }
+  if (req.readableEnded) return Promise.reject(Object.assign(new Error('تعذر قراءة بيانات الطلب الخام'), { status: 400 }));
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -64,9 +72,21 @@ function readBody(req, limit = 12 * 1024 * 1024) {
 }
 
 async function jsonBody(req) {
-  const buf = await readBody(req);
-  if (!buf.length) return {};
-  try { return JSON.parse(buf.toString('utf8')); } catch { return {}; }
+  let data;
+  try {
+    /* Vercel may provide req.body as an already-parsed JSON object. */
+    if (req.body !== undefined && !Buffer.isBuffer(req.body) && typeof req.body !== 'string') {
+      data = req.body;
+    } else {
+      const buf = await readBody(req);
+      data = buf.length ? JSON.parse(buf.toString('utf8')) : {};
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid_json');
+    return data;
+  } catch (e) {
+    if (e.message === 'too_large') throw e;
+    throw Object.assign(new Error('بيانات الطلب غير صالحة'), { status: 400 });
+  }
 }
 
 const settings = () => store.find('settings', (s) => s.id === 'main') || seed.SEED_SETTINGS;
@@ -77,6 +97,7 @@ const maskSecret = (v) => (v ? '••••••' + String(v).slice(-4) : '');
 function publicSettings() {
   const s = settings();
   const pc = s.paymentConfig || {};
+  const methods = (s.payments || []).filter((x) => x.enabled !== false && (x.kind !== 'online' || payments.onlineReady()));
   return {
     name: s.name, tagline: s.tagline, currency: s.currency, phone: s.phone, whatsapp: s.whatsapp,
     address: s.address, hoursText: s.hoursText, openHour: s.openHour, closeHour: s.closeHour,
@@ -84,10 +105,10 @@ function publicSettings() {
     minOrder: s.minOrder, deliveryEta: s.deliveryEta, promos: s.promos,
     addons: s.addons, statuses: s.statuses, imageLibrary: s.imageLibrary, aiAutoImages: s.aiAutoImages,
     /* طرق الدفع المتاحة للعميل (المفعّلة بس) — من غير أي مفاتيح */
-    payments: (s.payments || []).filter((x) => x.enabled !== false)
+    payments: methods
       .map((x) => ({ id: x.id, label: x.label, kind: x.kind || 'cod', note: x.note || '' })),
     onlinePayment: {
-      enabled: (s.payments || []).some((x) => x.kind === 'online' && x.enabled !== false),
+      enabled: methods.some((x) => x.kind === 'online'),
       provider: pc.provider || 'demo',
       currency: pc.currency || 'EGP',
       isDemo: (pc.provider || 'demo') === 'demo',
@@ -100,6 +121,7 @@ function publicSettings() {
     /* realtime=false معناها إن السيرفر سيرفرلس → الواجهة بتستخدم polling بدل SSE */
     realtime: REALTIME,
     storage: store.MODE,
+    demoLogin: auth.DEMO_OPEN,
   };
 }
 
@@ -123,6 +145,11 @@ function notifyStaff({ type, title, body, orderId, extra = {} }) {
   return notes;
 }
 
+/* Optional outbound messages run only AFTER the order/status is safely saved. */
+function afterOrderCommit(work) {
+  if (settings().whatsappNotify?.enabled) store.afterCommit(() => store.transaction(work));
+}
+
 /* ============================== SSE للإشعارات ============================== */
 const sseClients = new Set();   // { res, userId, role }
 
@@ -130,9 +157,14 @@ function sseSend(res, data) {
   try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch { /* العميل قفل */ }
 }
 function sseBroadcast(userIds, payload) {
-  for (const c of sseClients) {
-    if (!userIds || userIds.includes(c.userId)) sseSend(c.res, payload);
-  }
+  store.afterCommit(() => {
+    for (const c of sseClients) {
+      if (!userIds || userIds.includes(c.userId)) {
+        if (!auth.sessionUser(c.req)) { c.res.end(); sseClients.delete(c); continue; }
+        sseSend(c.res, payload);
+      }
+    }
+  });
 }
 
 /* ============================== الطلبات ============================== */
@@ -141,10 +173,17 @@ function computeTotals(items, promoCode) {
   const menu = store.all('menu');
   let subtotal = 0;
   const lines = [];
-  for (const raw of items || []) {
+  const invalid = (message) => { throw Object.assign(new Error(message), { status: 400 }); };
+  if (!Array.isArray(items) || items.length > 100) invalid('بيانات السلة غير صالحة');
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') invalid('بيانات الصنف غير صالحة');
     const m = menu.find((x) => String(x.id) === String(raw.id));
-    if (!m || m.active === false || m.available === false) continue;
-    const qty = Math.max(1, Math.min(50, Number(raw.qty) || 1));
+    if (!m || m.active === false || m.available === false || m.noPrice || !Number.isFinite(Number(m.price)) || Number(m.price) <= 0) {
+      invalid('صنف في السلة غير متاح للطلب — راجع المنيو');
+    }
+    const qty = raw.qty === undefined ? 1 : Number(raw.qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 50) invalid('الكمية لازم تكون من ١ إلى ٥٠');
+    if (raw.addons !== undefined && (!Array.isArray(raw.addons) || raw.addons.length > 10)) invalid('الإضافات غير صالحة');
 
     /* الإضافات: بناخد الاسم من العميل وبناخد السعر من الإعدادات بتاعة السيرفر
        (كده محدش يقدر يغيّر سعر الإضافات من المتصفح) */
@@ -154,7 +193,7 @@ function computeTotals(items, promoCode) {
       const name = typeof rawAddon === 'string' ? rawAddon : (rawAddon && rawAddon.name);
       if (!name) continue;
       const found = allowed.find((a) => a.name === name);
-      if (found) addons.push({ name: found.name, price: Number(found.price) || 0 });
+      if (found && !addons.some((a) => a.name === found.name)) addons.push({ name: found.name, price: Number(found.price) || 0 });
     }
     const unit = Number(m.price || 0) + addons.reduce((x, a) => x + a.price, 0);
     const line_total = unit * qty;
@@ -179,15 +218,25 @@ function computeTotals(items, promoCode) {
   return { lines, subtotal, delivery, discount, total, promo: promo ? promo.code : null };
 }
 
+function orderPaymentInfo(order) {
+  const method = (settings().payments || []).find((m) => m.id === order.payment);
+  const required = method?.kind === 'online' && order.payment_status !== 'paid';
+  return {
+    required: !!required, url: required ? order.paymentUrl || null : null,
+    provider: order.paymentProvider || null, mode: order.paymentProvider === 'paymob' ? 'iframe' : 'redirect',
+  };
+}
+
 /* ============================== الراوتات ============================== */
 async function api(req, res, u, url) {
   const p = url.pathname;
   const q = url.searchParams;
-  const send = (code, data) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
+  /* The response is returned to handle(); it is sent ONLY AFTER durable commit. */
+  const send = (code, data) => ({ code, data });
   const bad = (code, msg) => send(code, { error: msg });
 
   /* ------------------------------- عام ------------------------------- */
-  if (p === '/api/health') return send(200, { ok: true, time: new Date().toISOString() });
+  if (p === '/api/health') return send(200, { ok: true, storage: store.MODE, persistent: true, time: new Date().toISOString() });
 
   if (p === '/api/bootstrap') {
     return send(200, {
@@ -202,19 +251,24 @@ async function api(req, res, u, url) {
   if (p === '/api/auth/signup' && req.method === 'POST') {
     const b = await jsonBody(req);
     const email = String(b.email || '').trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) return bad(400, 'إيميل غير صالح');
-    if (String(b.password || '').length < 6) return bad(400, 'كلمة السر لازم ٦ أحرف على الأقل');
+    if (!auth.validEmail(email)) return bad(400, 'إيميل غير صالح');
+    if (!auth.validPassword(b.password)) return bad(400, 'كلمة السر لازم تكون من ٦ إلى ١٢٨ حرف');
+    const name = typeof b.name === 'string' ? b.name.trim() : '';
+    if (name.length < 2 || name.length > 120) return bad(400, 'اكتب اسمك من ٢ إلى ١٢٠ حرف');
+    if (email === auth.OWNER_EMAIL) return bad(409, 'البريد ده مخصص لحساب صاحب المطعم');
+    if (b.phone && (typeof b.phone !== 'string' || !/^[+\d\s()-]{10,30}$/.test(b.phone) || b.phone.replace(/\D/g, '').length < 10 || b.phone.replace(/\D/g, '').length > 15)) return bad(400, 'رقم الهاتف غير صالح');
     if (auth.byEmail(email)) return bad(409, 'الإيميل ده مسجل بالفعل');
-    const user = auth.createUser({ name: b.name, email, password: b.password, role: 'customer' });  // أي مستخدم جديد = Customer
+    const user = auth.createUser({ name, email, password: b.password, role: 'customer' });  // أي مستخدم جديد = Customer
     if (b.phone) store.update('users', user.id, { phone: String(b.phone).trim() });
     const s = auth.createSession(user, { ua: req.headers['user-agent'] });
-    console.log(`👤 مستخدم جديد: ${email}`);
+    store.afterCommit(() => console.log(`👤 مستخدم جديد: ${email}`));
     return send(201, { token: s.token, user: auth.publicUser(auth.byId(user.id)) });
   }
 
   if (p === '/api/auth/login' && req.method === 'POST') {
     const b = await jsonBody(req);
     const email = String(b.email || '').trim().toLowerCase();
+    if (!auth.validEmail(email) || !auth.validPassword(b.password)) return bad(401, 'الإيميل أو كلمة السر غلط');
     if (auth.tooManyAttempts(email)) return bad(429, 'محاولات كتير — استنى ربع ساعة وجرّب تاني');
     const user = auth.byEmail(email);
     const ok = user && user.salt && auth.verifyPassword(b.password || '', user.salt, user.hash);
@@ -233,32 +287,43 @@ async function api(req, res, u, url) {
   }
 
   if (p === '/api/auth/logout' && req.method === 'POST') {
-    const tk = (req.headers['authorization'] || '').replace('Bearer ', '');
-    store.write('sessions', store.all('sessions').filter((x) => x.token !== tk));
+    auth.destroySession(req);
     return send(200, { ok: true });
   }
 
   if (p === '/api/auth/me') return send(200, { user: auth.publicUser(u) });
 
   if (p === '/api/auth/forgot' && req.method === 'POST') {
+    if (!mail.configured()) return bad(503, 'خدمة استعادة كلمة السر غير مفعّلة حاليًا — تواصل مع المطعم');
     const b = await jsonBody(req);
     const r = auth.resetToken(b.email);
     if (r) {
       const link = `${process.env.APP_URL || 'http://localhost:' + PORT}/#/reset?token=${r.token}`;
-      await mail.send({
+      const delivered = await mail.send({
         to: r.user.email, subject: `${settings().name} — استعادة كلمة السر`,
         text: `أهلًا ${r.user.name || ''}،\n\nلإعادة تعيين كلمة السر افتح الرابط ده (صالح ساعة واحدة):\n${link}\n\nلو مش إنت اللي طلبت، تجاهل الرسالة.`,
       });
+      if (!delivered.ok) throw Object.assign(new Error('تعذر إرسال رسالة الاستعادة — جرّب لاحقًا'), { status: 503 });
     }
     return send(200, { ok: true, message: 'لو الإيميل مسجل عندنا، هتلاقي رسالة الاستعادة في بريدك.' });
   }
 
   if (p === '/api/auth/reset' && req.method === 'POST') {
     const b = await jsonBody(req);
-    if (String(b.password || '').length < 6) return bad(400, 'كلمة السر لازم ٦ أحرف على الأقل');
+    if (!auth.validPassword(b.password)) return bad(400, 'كلمة السر لازم تكون من ٦ إلى ١٢٨ حرف');
     const user = auth.consumeResetToken(String(b.token || ''), b.password);
     if (!user) return bad(400, 'الرابط غير صالح أو انتهت صلاحيته');
     return send(200, { ok: true, message: 'تم تغيير كلمة السر — سجّل الدخول من جديد' });
+  }
+
+  if (p === '/api/auth/password' && req.method === 'POST') {
+    if (!u) return bad(401, 'محتاج تسجيل دخول');
+    const b = await jsonBody(req);
+    if (!auth.verifyPassword(b.currentPassword, u.salt, u.hash)) return bad(400, 'كلمة السر الحالية غلط');
+    if (!auth.validPassword(b.password)) return bad(400, 'كلمة السر لازم تكون من ٦ إلى ١٢٨ حرف');
+    const updated = auth.changePassword(u, b.password);
+    const session = auth.createSession(updated, { ua: req.headers['user-agent'] });
+    return send(200, { token: session.token, user: auth.publicUser(updated) });
   }
 
   let whatsappPref = null;
@@ -278,6 +343,19 @@ async function api(req, res, u, url) {
   if (p === '/api/orders' && req.method === 'POST') {
     if (!u) return bad(401, 'لازم تسجّل الدخول الأول عشان نربط الطلب بحسابك');
     const b = await jsonBody(req);
+    const requestId = String(req.headers['idempotency-key'] || '');
+    if (requestId && !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) return bad(400, 'معرّف الطلب غير صالح');
+    const requestHash = crypto.createHash('sha256').update(JSON.stringify({
+      items: b.items, customer: b.customer, payment: b.payment || 'cash',
+      promoCode: b.promoCode || '', notifyWhatsapp: b.notifyWhatsapp !== false,
+    })).digest('hex');
+    if (requestId) {
+      const previous = store.find('orders', (o) => o.user_id === u.id && o.requestId === requestId);
+      if (previous) {
+        if (previous.requestHash !== requestHash) return bad(409, 'الطلب ده اتسجّل ببيانات مختلفة — راجع طلباتك');
+        return send(200, { order: previous, items: orderItemsFlat(previous), payment: orderPaymentInfo(previous), reused: true });
+      }
+    }
     const c = b.customer || {};
     if (!String(c.name || '').trim() || String(c.name).trim().length < 2) return bad(400, 'الاسم مطلوب');
     if (String(c.phone || '').replace(/\D/g, '').length < 10) return bad(400, 'رقم الهاتف غير صالح');
@@ -289,9 +367,8 @@ async function api(req, res, u, url) {
     if (t.subtotal < Number(s.minOrder || 0)) return bad(400, `أقل مبلغ للطلب ${s.minOrder} ${s.currency}`);
 
     /* طريقة الدفع: لازم تكون مفعّلة في الإعدادات */
-    const method = (s.payments || []).find((x) => x.id === String(b.payment || 'cash') && x.enabled !== false)
-      || (s.payments || []).find((x) => x.enabled !== false && (x.kind || 'cod') !== 'online')
-      || { id: 'cash', label: 'نقدًا عند التوصيل', kind: 'cod' };
+    const method = (s.payments || []).find((x) => x.id === String(b.payment || 'cash') && x.enabled !== false);
+    if (!method || (method.kind === 'online' && !payments.onlineReady())) return bad(400, 'طريقة الدفع غير متاحة حاليًا — اختار الدفع عند التوصيل');
     const isOnline = method.kind === 'online';
 
     const number = store.nextOrderNumber();
@@ -299,6 +376,7 @@ async function api(req, res, u, url) {
       id: 'BBQ-' + number,
       number,
       user_id: u.id,
+      ...(requestId ? { requestId, requestHash } : {}),
       customer: {
         name: String(c.name).slice(0, 120), phone: String(c.phone).slice(0, 30),
         area: String(c.area || '').slice(0, 120), address: String(c.address).slice(0, 400),
@@ -335,17 +413,18 @@ async function api(req, res, u, url) {
       orderId: fresh.id,
       extra: { total: fresh.total, customer: fresh.customer.name, phone: fresh.customer.phone, payment: method.id },
     });
-    console.log(`🧾 طلب جديد ${fresh.id} من ${fresh.customer.name} — ${fresh.total} ${s.currency} (${method.label})`);
+    store.afterCommit(() => console.log(`🧾 طلب جديد ${fresh.id} من ${fresh.customer.name} — ${fresh.total} ${s.currency} (${method.label})`));
 
     /* واتساب: تأكيد للعميل + إشعار للمطعم (لو مفعّل) + رابط الدفع */
-    whatsapp.notifyCustomer(fresh, 'new').catch(() => {});
-    whatsapp.notifyStaffWhatsapp(fresh).catch(() => {});
-    if (payInfo && payInfo.url) whatsapp.sendPaymentLink(fresh).catch(() => {});
+    afterOrderCommit(() => Promise.all([
+      whatsapp.notifyCustomer(fresh, 'new'), whatsapp.notifyStaffWhatsapp(fresh),
+      ...(payInfo && payInfo.url ? [whatsapp.sendPaymentLink(fresh)] : []),
+    ]));
 
     sseBroadcast([u.id], { kind: 'order:mine', orderId: fresh.id, status: fresh.status });
     return send(201, {
       order: fresh, items: orderItemsFlat(fresh),
-      payment: payInfo ? { url: payInfo.url, provider: payInfo.provider, mode: payInfo.mode, required: true } : { required: false },
+      payment: orderPaymentInfo(fresh),
     });
   }
 
@@ -382,7 +461,7 @@ async function api(req, res, u, url) {
       const out = await payments.verifyPayment(order);
       const fresh = store.find('orders', (o) => o.id === order.id) || order;
       if (out.status === 'paid' && order.payment_status !== 'paid') {
-        whatsapp.notifyPaid(fresh).catch(() => {});
+        afterOrderCommit(() => whatsapp.notifyPaid(fresh));
         notifyStaff({ type: 'payment_paid', title: 'تم دفع طلب 💳', body: `${fresh.id} · ${fresh.customer.name} · ${fresh.total} ${settings().currency}`, orderId: fresh.id });
         sseBroadcast([fresh.user_id], { kind: 'order:mine', orderId: fresh.id, status: fresh.status });
       }
@@ -397,7 +476,7 @@ async function api(req, res, u, url) {
       });
       sseBroadcast([order.user_id], { kind: 'order:mine', orderId: order.id, status: 'cancelled' });
       notifyStaff({ type: 'order_cancelled', title: 'طلب اتلغى ✖️', body: `${order.id} · ${order.customer.name}`, orderId: order.id });
-      whatsapp.notifyCustomer(updated, 'cancelled').catch(() => {});
+      afterOrderCommit(() => whatsapp.notifyCustomer(updated, 'cancelled'));
       return send(200, { order: updated });
     }
     if (req.method === 'GET') return send(200, { order, items: orderItemsFlat(order) });
@@ -417,18 +496,20 @@ async function api(req, res, u, url) {
 
   /* ---------------------------- الدفع (الصفحة العامة والـWebhooks) ---------------------------- */
   if (p === '/api/payments/demo/info') {
+    if (!payments.demoAllowed()) return bad(404, 'الدفع التجريبي غير متاح');
     const info = payments.demoInfo(q.get('ref') || '', q.get('t') || '');
     if (!info) return bad(404, 'رابط دفع غير صالح أو منتهي');
     return send(200, info);
   }
 
   if (p === '/api/payments/demo/complete' && req.method === 'POST') {
+    if (!payments.demoAllowed()) return bad(404, 'الدفع التجريبي غير متاح');
     const b = await jsonBody(req);
     const out = payments.demoComplete(String(b.ref || ''), String(b.token || ''), !!b.ok);
     if (!out.ok) return bad(400, out.error || 'فشل تنفيذ الدفع');
     const o = out.order;
     if (out.status === 'paid') {
-      whatsapp.notifyPaid(o).catch(() => {});
+      afterOrderCommit(() => whatsapp.notifyPaid(o));
       notifyStaff({ type: 'payment_paid', title: 'تم دفع طلب 💳', body: `${o.id} · ${o.customer.name} · ${o.total} ${settings().currency}`, orderId: o.id });
     }
     sseBroadcast([o.user_id], { kind: 'order:mine', orderId: o.id, status: o.status });
@@ -442,7 +523,7 @@ async function api(req, res, u, url) {
     if (out.ok && out.status === 'paid' && out.orderId) {
       const o = store.find('orders', (x) => x.id === out.orderId);
       if (o) {
-        whatsapp.notifyPaid(o).catch(() => {});
+        afterOrderCommit(() => whatsapp.notifyPaid(o));
         notifyStaff({ type: 'payment_paid', title: 'تم دفع طلب 💳', body: `${o.id} · ${o.customer.name} · ${o.total} ${settings().currency}`, orderId: o.id });
         sseBroadcast([o.user_id], { kind: 'order:mine', orderId: o.id, status: o.status });
       }
@@ -459,7 +540,7 @@ async function api(req, res, u, url) {
     if (out.ok && out.status === 'paid' && out.orderId) {
       const o = store.find('orders', (x) => x.id === out.orderId);
       if (o) {
-        whatsapp.notifyPaid(o).catch(() => {});
+        afterOrderCommit(() => whatsapp.notifyPaid(o));
         notifyStaff({ type: 'payment_paid', title: 'تم دفع طلب 💳', body: `${o.id} · ${o.customer.name} · ${o.total} ${settings().currency}`, orderId: o.id });
         sseBroadcast([o.user_id], { kind: 'order:mine', orderId: o.id, status: o.status });
       }
@@ -493,7 +574,7 @@ async function api(req, res, u, url) {
       'x-accel-buffering': 'no',
     });
     res.write('retry: 5000\n\n');
-    const client = { res, userId: u.id, role: u.role };
+    const client = { res, req, userId: u.id, role: u.role };
     sseClients.add(client);
     sseSend(res, { kind: 'hello', role: u.role });
     const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* ignore */ } }, 25000);
@@ -711,7 +792,7 @@ async function api(req, res, u, url) {
       });
       /* العميل بيتحدّث عنده فورًا في "طلباتي" (SSE) حتى بدون إعادة نشر التطبيق */
       sseBroadcast([order.user_id], { kind: 'order:mine', orderId: order.id, status: st });
-      whatsapp.notifyCustomer(updated, st).catch(() => {});   // إشعار واتساب للعميل
+      afterOrderCommit(() => whatsapp.notifyCustomer(updated, st));   // إشعار واتساب للعميل
       notifyStaff({ type: 'status_change', title: 'تحديث حالة طلب', body: `${order.id} → ${settings().statuses.find((x) => x.id === st).label}`, orderId: order.id, extra: { silent: true } });
       return send(200, { order: updated });
     }
@@ -826,6 +907,7 @@ async function api(req, res, u, url) {
       const target = auth.byId(decodeURIComponent(m[1]));
       if (!target) return bad(404, 'المستخدم غير موجود');
       const b = await jsonBody(req);
+      if (target.isOwner && ((b.role != null && b.role !== 'admin') || (b.active != null && b.active !== true))) return bad(400, 'لا يمكن تعطيل حساب صاحب المطعم أو إزالة صلاحياته');
       const patch = {};
       if (b.role != null) {
         if (!auth.ROLES.includes(b.role)) return bad(400, 'Role غير معروف');
@@ -910,56 +992,53 @@ function serveStatic(req, res, url) {
 }
 
 /* ============================== السيرفر ============================== */
+function sendJSON(res, code, data) {
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(data));
+}
+
 async function handle(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const routedPath = url.searchParams.get('__path') || url.searchParams.get('...route') || url.searchParams.get('route') || '';
-  if (routedPath && (url.pathname === '/api/index' || url.pathname === '/api/index.js' || url.pathname === '/api/[...route]' || url.pathname === '/api/[...route].js')) {
-    url.pathname = '/api/' + String(routedPath).replace(/^\/+/, '');
-  }
-  url.searchParams.delete('__path');
   try {
-    await ensureReady();
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const routedPath = url.searchParams.get('__path') || url.searchParams.get('...route') || url.searchParams.get('route') || '';
+    if (routedPath && ['/api/index', '/api/index.js', '/api/[...route]', '/api/[...route].js'].includes(url.pathname)) {
+      url.pathname = '/api/' + String(routedPath).replace(/^\/+/, '');
+    }
+    url.searchParams.delete('__path');
     if (url.pathname.startsWith('/api/')) {
-      const u = auth.sessionUser(req);
-      return await api(req, res, u, url);
+      await ensureReady();
+      const reply = await store.transaction(() => api(req, res, auth.sessionUser(req), url));
+      if (reply) sendJSON(res, reply.code, reply.data);
+      return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('Method not allowed'); }
-    await serveStatic(req, res, url);
+    serveStatic(req, res, url);
   } catch (e) {
-    console.error('[server]', e);
-    if (!res.headersSent) { res.writeHead(500, { 'content-type': 'application/json' }); }
-    res.end(JSON.stringify({ error: e.message === 'too_large' ? 'الملف كبير جدًا (الحد 12 ميجا)' : 'خطأ في السيرفر' }));
-  } finally {
-    /* في Vercel لازم نتأكد إن الكتابة وصلت للتخزين قبل ما الدالة تقفل */
-    if (SERVERLESS) await store.idle().catch(() => {});
+    console.error('[server]', e.code || e.status || 'error', e.message);
+    if (res.headersSent) { if (!res.writableEnded) res.end(); return; }
+    const unavailable = e.code === 'STORAGE_UNAVAILABLE' || e.code === 'OWNER_NOT_CONFIGURED';
+    sendJSON(res, unavailable ? 503 : (e.status || 500), {
+      error: unavailable ? 'خدمة التسجيل والطلبات غير متاحة مؤقتًا — المطعم محتاج يراجع إعدادات قاعدة البيانات والحساب. لم يتم تأكيد الطلب.'
+        : e.message === 'too_large' ? 'الملف كبير جدًا (الحد 12 ميجا)' : e.status ? e.message : 'خطأ في السيرفر',
+      ...(unavailable ? { code: e.code } : {}),
+    });
   }
 }
 
-/** نسخة Vercel: بنستنى الحفظ قبل ما ننهي الرد */
-async function serverlessHandler(req, res) {
-  let endPromise = Promise.resolve();
-  const end = res.end.bind(res);
-  res.end = (...args) => {
-    endPromise = store.idle().catch(() => {}).then(() => end(...args));
-    return res;
-  };
-  await handle(req, res);
-  await endPromise;
-}
-
+/* One handler, with the same commit-before-response guarantee on Node and Vercel. */
+const serverlessHandler = handle;
 const server = http.createServer(handle);
-
 if (require.main === module) {
   ensureReady().then(() => server.listen(PORT, HOST, () => {
     console.log('');
-    console.log('🔥 The Original BBQ — التطبيق شغال');
-    console.log(`   افتح:   http://localhost:${PORT}`);
-    console.log(`   الإدارة: http://localhost:${PORT}/#/admin`);
-    console.log('   حسابات: admin@bbq.app/admin123 · supervisor@bbq.app/super123 · demo@bbq.app/demo123');
-    console.log(`   مولّد الصور: ${process.env.GEMINI_API_KEY ? 'Gemini ✔' : process.env.OPENAI_API_KEY ? 'OpenAI ✔' : 'مكتبة مدمجة (بدون مفتاح API)'}`);
-    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis' : 'ملفات محلية'}`);
+    console.log('🔥 The Original BBQ — التسجيل والطلبات شغالين على تخزين دائم');
+    console.log(`   افتح: http://localhost:${PORT}`);
+    console.log(`   الإدارة: /#/admin · صاحب المطعم: ${auth.OWNER_EMAIL}`);
+    console.log(`   التخزين: ${store.MODE === 'redis' ? 'Upstash Redis' : 'قرص السيرفر — يلزم قرص دائم على الاستضافة'}`);
     console.log('');
-  }));
+  })).catch((e) => {
+    console.error('[startup]', e.message);
+    process.exitCode = 1;
+  });
 }
-
 module.exports = { server, serverlessHandler, handle, ensureReady, api, computeTotals, publicSettings, SERVERLESS, REALTIME };

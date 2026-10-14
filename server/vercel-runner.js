@@ -26,7 +26,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
   const server = http.createServer(serverlessHandler);
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
 
-  const admin = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).d;
+  const admin = (await J('POST', '/api/auth/login', { body: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD } })).d;
   const out = {};
 
   if (MODE === 'first') {
@@ -35,6 +35,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
     out.realtime = boot.d.settings.realtime;
     out.menu = boot.d.menu.length;
 
+    await J('PATCH', '/api/admin/whatsapp', { token: admin.token, body: { enabled: true, provider: 'console' } });
     const cu = (await J('POST', '/api/auth/signup', { body: { name: 'عميل فيرسل', email: 'v@bbq.app', password: 'v123456', phone: '01011122233' } })).d;
     const ord = await J('POST', '/api/orders', {
       token: cu.token,
@@ -61,7 +62,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
     out.imgStatus = img.status;
     out.imgBytes = (await img.arrayBuffer()).byteLength;
   } else {
-    out.login = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).status;
+    out.login = (await J('POST', '/api/auth/login', { body: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD } })).status;
     const ords = await J('GET', '/api/admin/orders', { token: admin.token });
     out.orders = ords.d.orders.length;
     out.orderId = ords.d.orders[0] && ords.d.orders[0].id;

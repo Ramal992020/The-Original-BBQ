@@ -214,9 +214,7 @@ async function notifyStaffWhatsapp(order, staffChat = true) {
   const numbers = (cfg.staffNumbers || []).filter(Boolean);
   const tpl = (cfg.templates && cfg.templates.staff_new) || DEFAULT_TEMPLATES.staff_new;
   const text = render(tpl, varsFor(order));
-  const rows = [];
-  for (const n of numbers) rows.push(await send({ phone: n, text, orderId: order.id, type: 'staff_new', force: true }));
-  return rows;
+  return Promise.all(numbers.map((n) => send({ phone: n, text, orderId: order.id, type: 'staff_new', force: true })));
 }
 
 /** إرسال رابط الدفع للعميل */

@@ -1,41 +1,31 @@
-/* ============================================================================
-   mail.js — إرسال الإيميلات (استعادة كلمة السر)
-   ----------------------------------------------------------------------------
-   افتراضيًا بيطبع الرسالة في الـconsole (طريقة "console transport") عشان
-   التطبيق يشتغل بدون أي إعدادات. لو حبيت إيميل حقيقي:
-     ضيف متغيرات البيئة دي وشغّل السيرفر:
-       SMTP_HOST=smtp.gmail.com SMTP_PORT=465 SMTP_USER=you@gmail.com SMTP_PASS=... MAIL_FROM="BBQ <you@gmail.com>"
-   (الربط الحقيقي بـ SMTP بيتم من nodemailer — بديل بسيط: خدمة Resend/Twilio عبر fetch).
-   ========================================================================== */
 'use strict';
-
-const OUTBOX = [];   // آخر الرسائل المرسلة (للمعاينة من لوحة الإدارة لو حبيت)
+/* Password recovery must not claim to send real mail when no provider is set up. */
+const OUTBOX = [];
+const consoleAllowed = () => process.env.ALLOW_CONSOLE_MAIL === '1'
+  && process.env.NODE_ENV !== 'production' && !process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME;
+const configured = () => !!process.env.RESEND_API_KEY || consoleAllowed();
 
 async function send({ to, subject, text, html }) {
+  if (!configured()) return { ok: false, via: 'none' };
   const msg = { to, subject, text, html, at: new Date().toISOString() };
   OUTBOX.unshift(msg);
   if (OUTBOX.length > 50) OUTBOX.pop();
-
   if (process.env.RESEND_API_KEY) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const r = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST', signal: controller.signal,
         headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.RESEND_API_KEY },
         body: JSON.stringify({ from: process.env.MAIL_FROM || 'onboarding@resend.dev', to: [to], subject, text }),
       });
-      if (r.ok) return { ok: true, via: 'resend' };
-      console.warn('[mail] Resend فشل:', r.status);
-    } catch (e) { console.warn('[mail] Resend خطأ:', e.message); }
+      if (res.ok) return { ok: true, via: 'resend' };
+      console.warn('[mail] Resend failed:', res.status);
+    } catch { console.warn('[mail] Email delivery failed'); }
+    finally { clearTimeout(timeout); }
+    return { ok: false, via: 'resend' };
   }
-
-  console.log('\n📧 ===== رسالة (console transport) =====');
-  console.log('إلى:', to);
-  console.log('الموضوع:', subject);
-  console.log(text);
-  console.log('=======================================\n');
+  console.log('\n📧 رسالة اختبار فقط (لا تُرسل لبريد حقيقي):', to, subject, text);
   return { ok: true, via: 'console' };
 }
-
-const outbox = () => OUTBOX.slice(0, 20);
-
-module.exports = { send, outbox };
+module.exports = { send, configured, outbox: () => OUTBOX.slice(0, 20) };

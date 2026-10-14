@@ -2,9 +2,9 @@
    seed.js — البيانات الأولية (تتعمل مرة واحدة أول تشغيل)
    ----------------------------------------------------------------------------
    - 50 صنف أصلي من منيو The Original BBQ + صور مولّدة تلقائيًا لكل صنف.
-   - 3 حسابات جاهزة: Admin و Supervisor و Customer.
+   - صاحب المطعم من إعدادات سرّية؛ الحسابات التجريبية لا تُنشأ في الإنتاج.
    - إعدادات المطعم العامة.
-   بعد أول تشغيل، كل حاجة بتبقى في ملفات data/*.json وتتعدّل من لوحة الإدارة.
+   البيانات محفوظة في قاعدة دائمة وتتعدّل من لوحة الإدارة.
    ========================================================================== */
 'use strict';
 const store = require('./store');
@@ -157,7 +157,7 @@ const SETTINGS = {
   payments: [
     { id: 'cash', label: 'نقدًا عند التوصيل', kind: 'cod', enabled: true },
     { id: 'card_delivery', label: 'بطاقة عند التوصيل', kind: 'cod', enabled: true },
-    { id: 'online', label: 'دفع أونلاين (بطاقة / محفظة)', kind: 'online', enabled: true,
+    { id: 'online', label: 'دفع أونلاين (بطاقة / محفظة)', kind: 'online', enabled: false,
       note: 'رابط دفع آمن — الطلب بيتأكد بعد نجاح الدفع' },
   ],
 
@@ -172,7 +172,7 @@ const SETTINGS = {
 
   /* ===== إشعارات واتساب ===== */
   whatsappNotify: {
-    enabled: true,
+    enabled: false,
     provider: 'console',              // console | link | meta | twilio | greenapi | ultramsg | callmebot
     defaultCountryCode: '20',
     requireOptIn: true,               // مبعتش لحد ما العميل يوافق
@@ -197,7 +197,7 @@ const SETTINGS = {
     rolls: [{ name: 'جبنة موتزاريلا', price: 15 }, { name: 'جبنة شيدر', price: 15 }, { name: 'صوص إضافي', price: 10 }],
   },
   statuses: [
-    { id: 'new', label: 'طلب جديد', emoji: '📥', note: 'وصلنا طلبك وبدأنا نجهّزه' },
+    { id: 'new', label: 'طلب جديد', emoji: '📥', note: 'تم إرسال طلبك للمطعم — في انتظار تأكيد الإدارة' },
     { id: 'received', label: 'تم استلام الطلب', emoji: '✅', note: 'المطعم أكّد استلام الطلب' },
     { id: 'preparing', label: 'جاري التجهيز', emoji: '🔥', note: 'بيتجهّز دلوقتي على الفحم' },
     { id: 'on_way', label: 'خرج للتوصيل', emoji: '🛵', note: 'الطلب خرج مع الدليفري' },
@@ -216,16 +216,33 @@ function seed() {
     const patch = {};
     if (!cur.paymentConfig) patch.paymentConfig = SETTINGS.paymentConfig;
     if (!cur.whatsappNotify) patch.whatsappNotify = SETTINGS.whatsappNotify;
+    if (cur.statuses?.some((status) => status.id === 'new' && status.note === 'وصلنا طلبك وبدأنا نجهّزه')) {
+      patch.statuses = cur.statuses.map((status) => status.id === 'new' ? { ...status, note: SETTINGS.statuses[0].note } : status);
+    }
     if (!Array.isArray(cur.payments) || !cur.payments[0] || !cur.payments[0].kind) patch.payments = SETTINGS.payments;
     if (Object.keys(patch).length) { store.update('settings', 'main', patch); console.log('⬆️ تمت ترقية الإعدادات (دفع أونلاين + واتساب)'); }
   }
 
-  if (!store.all('users').length) {
-    auth.createUser({ name: 'صاحب المطعم', email: 'admin@bbq.app', password: 'admin123', role: 'admin' });
-    auth.createUser({ name: 'مشرف الكاشير', email: 'supervisor@bbq.app', password: 'super123', role: 'supervisor' });
-    auth.createUser({ name: 'عميل تجريبي', email: 'demo@bbq.app', password: 'demo123', role: 'customer' });
-    created = true;
-    console.log('👤 تم إنشاء الحسابات: admin@bbq.app/admin123 · supervisor@bbq.app/super123 · demo@bbq.app/demo123');
+  /* Owner setup is independent of whether customers already exist. */
+  auth.bootstrapOwner();
+  const fixtures = [
+    { name: 'أدمن تجريبي', email: 'admin@bbq.app', password: 'admin123', role: 'admin' },
+    { name: 'مشرف تجريبي', email: 'supervisor@bbq.app', password: 'super123', role: 'supervisor' },
+    { name: 'عميل تجريبي', email: 'demo@bbq.app', password: 'demo123', role: 'customer' },
+  ];
+  const devFixtures = process.env.SEED_DEMO === '1' && process.env.NODE_ENV !== 'production' && !store.IS_SERVERLESS;
+  if (devFixtures) {
+    for (const fixture of fixtures) if (!auth.byEmail(fixture.email)) auth.createUser(fixture);
+  } else {
+    /* Disable only untouched, publicly-known legacy accounts. Keep their order history.
+       An account whose password was changed is NOT silently disabled or overwritten. */
+    for (const fixture of fixtures) {
+      const user = auth.byEmail(fixture.email);
+      if (user && !user.isOwner && user.active !== false && auth.verifyPassword(fixture.password, user.salt, user.hash)) {
+        store.update('users', user.id, { active: false });
+        store.write('sessions', store.all('sessions').filter((session) => session.userId !== user.id));
+      }
+    }
   }
 
   if (!store.all('categories').length) {

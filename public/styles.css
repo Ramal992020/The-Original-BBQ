@@ -573,3 +573,7 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 .code { background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:2px 7px; font-size:12px;
   font-family:ui-monospace,Menlo,Consolas,monospace; direction:ltr; display:inline-block; margin:4px 0; word-break:break-all; }
 .wa-grp { border:1px dashed var(--border); border-radius:var(--radius-sm); padding:12px; background:var(--wa-grp-bg); }
+
+/* Account/server failures are visible next to the form, not only in a toast. */
+.form-error { color: var(--red, #e96658); margin: 10px 0; }
+.form-error[hidden] { display: none; }
