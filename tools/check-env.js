@@ -15,7 +15,7 @@
 'use strict';
 
 /* --vercel = «اختبرني كأني على Vercel»: يفعّل نفس شروط السيرفرلس
-   (مفيش قرص → لازم Upstash، ولازم APP_URL و ADMIN_PASSWORD) */
+   (مفيش قرص → لازم Supabase (أو Upstash القديم)، ولازم APP_URL و ADMIN_PASSWORD) */
 const simulateVercel = process.argv.includes('--vercel');
 if (simulateVercel && !process.env.VERCEL) process.env.VERCEL = '1';
 
@@ -36,8 +36,15 @@ const iconFor = (v) => (v.status === 'missing' && v.level !== 'required' ? '⚠�
   const ping = !process.argv.includes('--no-ping');
   const asJson = process.argv.includes('--json');
 
-  await store.init();
-  const rep = await deployEnv.report({ ping });
+  /* حتى لو الإعداد ناقص (init بيرفض)، التقرير لازم يشتغل ويقولك إيه الناقص بالظبط */
+  let storageBroken = null;
+  try { await store.init(); } catch (e) { storageBroken = e; }
+  const rep = await deployEnv.report({ ping: ping && !storageBroken });
+  if (storageBroken) {
+    rep.ok = false;
+    rep.ready = false;
+    rep.warnings = [{ level: 'danger', message: storageBroken.message }, ...rep.warnings];
+  }
 
   if (asJson) {
     console.log(JSON.stringify(rep, null, 2));
@@ -49,9 +56,11 @@ const iconFor = (v) => (v.status === 'missing' && v.level !== 'required' ? '⚠�
   console.log(col(C.bold, '🔥 The Original BBQ — فحص جاهزية النشر'));
   console.log(line);
   console.log(`   الوضع        : ${rep.serverless ? (simulateVercel ? 'سيرفرلس (محاكاة Vercel)' : 'سيرفرلس (Vercel)') : 'سيرفر عادي (محلي)'}`);
-  console.log(`   التخزين      : ${rep.storage === 'redis'
-    ? col(C.green, 'Upstash Redis (دائم)')
-    : col(rep.serverless ? C.red : C.yellow, rep.serverless ? 'ملفات /tmp — البيانات هتضيع مع كل Deploy ❗' : 'ملفات JSON محلية')}`);
+  console.log(`   التخزين      : ${rep.storage === 'postgres'
+    ? col(C.green, 'Supabase PostgreSQL (دائم)')
+    : rep.storage === 'redis'
+      ? col(C.green, 'Upstash Redis (دائم — بديل قديم)')
+      : col(rep.serverless ? C.red : C.yellow, rep.serverless ? 'ملفات /tmp — البيانات هتضيع مع كل Deploy ❗' : 'ملفات JSON محلية')}`);
   console.log(`   Node         : ${rep.node}`);
   if (rep.appUrl) console.log(`   APP_URL      : ${rep.appUrl}`);
 
@@ -73,12 +82,13 @@ const iconFor = (v) => (v.status === 'missing' && v.level !== 'required' ? '⚠�
     }
   }
 
-  if (rep.redis) {
+  const dbPing = rep.database || rep.redis;
+  if (dbPing) {
     console.log('');
-    console.log(col(C.bold, 'اتصال Upstash:'));
-    if (rep.redis.skipped) console.log(col(C.dim, '   ⏭️  مفيش فحص — التخزين الحالي مش Redis'));
-    else if (rep.redis.ok) console.log(col(C.green, `   ✅ PONG في ${rep.redis.ms}ms — الرابط والتوكن شغالين`));
-    else console.log(col(C.red, `   ❌ فشل: ${rep.redis.error}`));
+    console.log(col(C.bold, rep.storage === 'postgres' ? 'اتصال Supabase:' : 'اتصال Upstash:'));
+    if (dbPing.skipped) console.log(col(C.dim, '   ⏭️  مفيش فحص — التخزين الحالي مش قاعدة سحابية'));
+    else if (dbPing.ok) console.log(col(C.green, `   ✅ PONG في ${dbPing.ms}ms — الرابط والمفتاح شغالين`));
+    else console.log(col(C.red, `   ❌ فشل: ${dbPing.error}`));
   }
 
   console.log('');
@@ -110,7 +120,7 @@ const iconFor = (v) => (v.status === 'missing' && v.level !== 'required' ? '⚠�
     console.log(col(C.red + C.bold, '❌ لسه مش جاهز:'));
     if (rep.missing.length) console.log(`   ناقص : ${rep.missing.join('، ')}`);
     if (rep.invalid.length) console.log(`   غلط  : ${rep.invalid.join('، ')}`);
-    console.log(col(C.dim, '   الشرح الكامل خطوة بخطوة: docs/VERCEL-UPSTASH.md'));
+    console.log(col(C.dim, `   الشرح الكامل خطوة بخطوة: ${rep.storage === 'redis' ? 'docs/VERCEL-UPSTASH.md' : 'docs/SUPABASE.md'}`));
   }
   console.log('');
 

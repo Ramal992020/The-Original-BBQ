@@ -24,7 +24,8 @@ const auth = require('./auth');
 
 const clean = (v) => String(v == null ? '' : v).trim().replace(/^['"]+|['"]+$/g, '').trim();
 const SERVERLESS = store.IS_SERVERLESS;
-const wantsRedis = () => SERVERLESS || store.MODE === 'redis';
+const wantsPostgres = () => store.MODE === 'postgres' || (SERVERLESS && store.MODE !== 'redis');
+const wantsRedis = () => store.MODE === 'redis';
 const ownerEmail = () => auth.OWNER_EMAIL;
 const hasOwnerHash = () => !!clean(process.env.ADMIN_PASSWORD_HASH);
 const supervisorEmail = () => (clean(process.env.SUPERVISOR_EMAIL) || 'supervisor@bbq.app').toLowerCase();
@@ -32,6 +33,19 @@ const supervisorEmail = () => (clean(process.env.SUPERVISOR_EMAIL) || 'superviso
 /* --------------------------- مواصفات المتغيرات --------------------------- */
 /* level: 'required' = التطبيق مش هيشتغل صح من غيره · 'recommended' = ينفع بس مخاطرة */
 const SPEC = [
+  {
+    key: 'SUPABASE_URL', secret: false, level: 'required', when: wantsPostgres,
+    label: 'رابط مشروع Supabase',
+    hint: 'من لوحة Supabase → Project Settings → API → Project URL — لازم يبدأ بـ https://',
+    validate: (v) => (/^https?:\/\/[^\s]+\.[^\s]+$/i.test(v) ? null
+      : 'لازم رابط المشروع يبدأ بـ https:// — مثال: https://xxxx.supabase.co'),
+  },
+  {
+    key: 'SUPABASE_SERVICE_ROLE_KEY', secret: true, level: 'required', when: wantsPostgres,
+    label: 'مفتاح service_role السري (Supabase)',
+    hint: 'من Supabase → Settings → API → Project API keys → service_role (السري) — للسيرفر بس، مش للواجهة',
+    validate: (v) => (v.length >= 30 ? null : 'المفتاح قصير جدًا — غالبًا نسخته ناقصة (خد service_role مش anon)'),
+  },
   {
     key: 'UPSTASH_REDIS_REST_URL', secret: false, level: 'required', when: wantsRedis,
     label: 'رابط قاعدة Upstash (REST)',
@@ -82,8 +96,8 @@ const SPEC = [
   {
     key: 'STORAGE', secret: false, level: 'recommended', when: () => false,
     label: 'إجبار نوع التخزين',
-    hint: 'redis أو file — لتجاوز الاختيار التلقائي (سيبها فاضية أضمن)',
-    validate: (v) => (['redis', 'file'].includes(v) ? null : 'القيم المقبولة: redis أو file'),
+    hint: 'postgres أو redis أو file — لتجاوز الاختيار التلقائي (سيبها فاضية أضمن)',
+    validate: (v) => (['postgres', 'supabase', 'redis', 'file'].includes(v) ? null : 'القيم المقبولة: postgres أو redis أو file'),
   },
   {
     key: 'REDIS_PREFIX', secret: false, level: 'recommended', when: () => false,
@@ -117,25 +131,35 @@ function checkVars() {
       present,
       value: s.display && present ? s.display() : mask(s.key, raw),
       error,                                             // null = تمام
-      status: !active && s.level === 'recommended' && !raw ? 'optional'
+      status: !active && !present ? 'optional'     // مش مطلوب في وضع التخزين الحالي
         : !present ? 'missing' : error ? 'invalid' : 'ok',
     };
   });
 }
 
-/* --------------------- اتصال تجريبي حقيقي بـ Upstash --------------------- */
-async function pingRedis() {
-  if (store.MODE !== 'redis') return { ok: false, skipped: true, error: 'التخزين الحالي مش Redis' };
+/* --------------------- اتصال تجريبي حقيقي بقاعدة البيانات ------------------ */
+async function pingDatabase() {
   const t0 = Date.now();
+  if (store.MODE === 'postgres') {
+    try {
+      const pong = await require('./supabase').ping();
+      if (pong !== 'pong') return { ok: false, error: 'رد غير متوقع من Supabase: ' + JSON.stringify(pong) };
+      return { ok: true, ms: Date.now() - t0, backend: 'postgres' };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e), backend: 'postgres' };
+    }
+  }
+  if (store.MODE !== 'redis') return { ok: false, skipped: true, error: 'التخزين الحالي مش قاعدة سحابية' };
   try {
     const out = await store.redisCmd([['PING']], { timeout: 8000 });
     const pong = String((out && out[0]) || '').toUpperCase();
     if (pong !== 'PONG') return { ok: false, error: 'رد غير متوقع من Upstash: ' + JSON.stringify(out && out[0]) };
-    return { ok: true, ms: Date.now() - t0 };
+    return { ok: true, ms: Date.now() - t0, backend: 'redis' };
   } catch (e) {
-    return { ok: false, error: e.message || String(e) };
+    return { ok: false, error: e.message || String(e), backend: 'redis' };
   }
 }
+const pingRedis = pingDatabase;   // توافق قديم مع أي كود بيتكلم pingRedis
 
 /* ------------------- تجهيز حسابات الطاقم من متغيرات البيئة ---------------- */
 /**
@@ -208,31 +232,34 @@ function publicReport() {
   const vars = checkVars();
   return {
     serverless: SERVERLESS,
-    storage: store.MODE,                                   // redis | file
+    storage: store.MODE,                                   // postgres | redis | file
     missing: vars.filter((v) => v.active && v.status === 'missing' && v.level === 'required').map((v) => v.key),
     invalid: vars.filter((v) => v.active && v.status === 'invalid').map((v) => v.key),
     ownerFromEnv: !!clean(process.env.ADMIN_PASSWORD) || hasOwnerHash(),
-    guide: 'docs/VERCEL-UPSTASH.md',
+    guide: wantsRedis() ? 'docs/VERCEL-UPSTASH.md' : 'docs/SUPABASE.md',
   };
 }
 
 /* ------------------------------ التقرير الكامل --------------------------- */
 async function report({ ping = true } = {}) {
   const vars = checkVars();
-  const missing = vars.filter((v) => v.status === 'missing' && v.level === 'required').map((v) => v.key);
-  const invalid = vars.filter((v) => v.status === 'invalid').map((v) => v.key);
-  const redis = ping ? await pingRedis() : null;
+  const missing = vars.filter((v) => v.active && v.status === 'missing' && v.level === 'required').map((v) => v.key);
+  const invalid = vars.filter((v) => v.active && v.status === 'invalid').map((v) => v.key);
+  const redis = ping ? await pingDatabase() : null;
 
   const warnings = [];
-  if (SERVERLESS && store.MODE !== 'redis') {
+  if (SERVERLESS && store.MODE !== 'redis' && store.MODE !== 'postgres') {
     warnings.push({
       level: 'danger',
-      message: 'التطبيق شغال سيرفرلس من غير Upstash → التخزين هيترفض عند أول طلب. ' +
-        'سجّل UPSTASH_REDIS_REST_URL و UPSTASH_REDIS_REST_TOKEN واعمل Redeploy.',
+      message: 'التطبيق شغال سيرفرلس من غير قاعدة دائمة → التخزين هيترفض عند أول طلب. ' +
+        'سجّل SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY (المُوصى به) أو بيانات Upstash القديمة واعمل Redeploy.',
     });
   }
   if (redis && !redis.ok && !redis.skipped) {
-    warnings.push({ level: 'danger', message: 'فشل الاتصال بـ Upstash: ' + redis.error });
+    warnings.push({
+      level: 'danger',
+      message: (redis.backend === 'postgres' ? 'فشل الاتصال بـ Supabase: ' : 'فشل الاتصال بـ Upstash: ') + redis.error,
+    });
   }
   if (SERVERLESS && !clean(process.env.APP_URL)) {
     warnings.push({ level: 'warn', message: 'APP_URL مش متظبط — روابط الدفع وواتساب واستعادة كلمة السر هتطلع غلط.' });
@@ -253,15 +280,17 @@ async function report({ ping = true } = {}) {
     ready: !missing.length && !invalid.length,
     serverless: SERVERLESS,
     realtime: !SERVERLESS,
-    storage: store.MODE,                    // redis | file
-    storageLabel: store.MODE === 'redis' ? 'Upstash Redis (دائم)' : 'قرص السيرفر (يحتاج قرص دائم)',
+    storage: store.MODE,                    // postgres | redis | file
+    storageLabel: store.MODE === 'postgres' ? 'Supabase PostgreSQL (دائم)'
+      : store.MODE === 'redis' ? 'Upstash Redis (دائم — بديل قديم)' : 'قرص السيرفر (يحتاج قرص دائم)',
     redisPrefix: store.PREFIX,
     node: process.version,
     appUrl: clean(process.env.APP_URL) || '',
     vars,
     missing,
     invalid,
-    redis,
+    database: redis,
+    redis,               // توافق قديم: نفس نتيجة فحص قاعدة البيانات
     credentials: {
       ownerEmail: ownerEmail(),
       ownerFromEnv: !!clean(process.env.ADMIN_PASSWORD) || hasOwnerHash(),
@@ -275,4 +304,4 @@ async function report({ ping = true } = {}) {
   };
 }
 
-module.exports = { report, publicReport, pingRedis, checkVars, syncCredentials, defaultPasswordCheck, mask, SPEC, SERVERLESS };
+module.exports = { report, publicReport, pingDatabase, pingRedis, checkVars, syncCredentials, defaultPasswordCheck, mask, SPEC, SERVERLESS };

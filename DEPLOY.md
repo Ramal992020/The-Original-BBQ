@@ -5,21 +5,23 @@
 > **المشروع بيشتغل في وضعين من نفس الكود بالظبط، وبيختار لوحده:**
 > | | وضع السيرفر العادي | وضع Vercel (سيرفرلس) |
 > |---|---|---|
-> | التخزين | ملفات JSON في `server/data/` | **Upstash Redis** (REST — بدون أي مكتبات خارجية) |
+> | التخزين | ملفات JSON في `server/data/` | **Supabase PostgreSQL** (مُوصى به) أو Upstash Redis (Legacy — بدون أي مكتبات خارجية) |
 > | تحديث الطلبات | ✅ لحظي (SSE) | 🔄 كل ٥ ثوانٍ أثناء فتح التطبيق (الواجهة بتتبدّل لوحدها) |
 > | الصور المرفوعة | على القرص في `uploads/` | جوّه قاعدة البيانات وبتتقدم من `/api/img/:id` |
 > | الطلبات والصلاحيات والدفع والواتساب | ✅ | ✅ |
 > | ينفع لمين | VPS / Render (لو عايز لحظية كاملة) | أسهل إعداد وأرخصه (Free) |
 >
-> **الاختيار الأوتوماتيك:** على Vercel أو مع إعدادات Upstash → Redis. محليًا بدون Redis → ملف دائم. على Vercel غياب/فشل Redis ينتج 503، ولا يتحول إلى `/tmp`.
-> (وتقدر تختار `STORAGE=redis` أو `STORAGE=file` خارج السيرفرلس. Vercel يقبل Redis فقط.)
+> **الاختيار الأوتوماتيك:** مع إعدادات Supabase → PostgreSQL أولًا، وإلا مع إعدادات Upstash → Redis. محليًا بدونهما → ملف دائم.
+> على Vercel غياب قاعدة دائمة ينتج 503 صريح، ولا يتحول إلى `/tmp` أبدًا.
+> (وتقدر تجبر الاختيار بـ `STORAGE=postgres` أو `STORAGE=redis` أو `STORAGE=file` خارج السيرفرلس. Vercel يقبل postgres أو redis فقط.)
 
 ---
 
 ## 📋 المحتويات
 
-> 📌 **عايز الخطوات بالتفصيل من الصفر؟** [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md) —
-> إنشاء قاعدة Upstash → نسخ الرابط والتوكن → إضافتهم في Vercel → Redeploy → التأكد (بالصور والنسخ/اللصق).
+> 📌 **عايز الخطوات بالتفصيل من الصفر؟** [`docs/SUPABASE.md`](docs/SUPABASE.md) —
+> إنشاء مشروع Supabase → تشغيل migration → نسخ `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` → إضافتهم في Vercel → Redeploy → التأكد (بالصور والنسخ/اللصق) + ترحيل البيانات القديمة.
+> (ولو بتفضل Upstash: [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md) — لسه مدعوم كـLegacy.)
 
 1. [قبل ما تبدأ](#١-قبل-ما-تبدأ)
 2. [الطريق أ: Vercel + Upstash (المُوصى به)](#٢-الطريق-أ-vercel--upstash)
@@ -128,10 +130,10 @@ git push -u origin main
 
 | الفحص | إزاي | المفروض |
 |---|---|---|
-| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `"storage":"redis"` و `"persistent":true` و `"ownerFromEnv":true` |
-| التخزين بقى Redis | افتح `https://<app>.vercel.app/api/bootstrap` | جوّه `settings`: `"storage":"redis"` و `"realtime":false` |
-| الإعداد مكتمل | لوحة الإدارة → تبويب **🛠️ النظام** | ✅ جنب كل متغير إجباري + زمن الرد من Upstash |
-| قبل النشر (من جهازك) | `npm run check:env -- --vercel` | كل المتغيرات الإجبارية ✅ + `PONG` من Upstash |
+| الدالة حيّة | افتح `https://<app>.vercel.app/api/health` | `"storage":"postgres"` و `"persistent":true` و `"ownerFromEnv":true` |
+| التخزين بقى Supabase | افتح `https://<app>.vercel.app/api/bootstrap` | جوّه `settings`: `"storage":"postgres"` و `"realtime":false` |
+| الإعداد مكتمل | لوحة الإدارة → تبويب **🛠️ النظام** | ✅ جنب كل متغير إجباري + زمن الرد من Supabase |
+| قبل النشر (من جهازك) | `npm run check:env -- --vercel` | كل المتغيرات الإجبارية ✅ + `PONG` من القاعدة |
 | الواجهة | افتح الدومين | المنيو بـ ٥٠ صنف بالصور |
 | الدخول | `aliielramal@gmail.com` وكلمة السر التي ضبطتها بشكل خاص | لوحة الإدارة تفتح |
 
@@ -152,8 +154,10 @@ git push -u origin main
 
 | المتغير | إجباري؟ | فين | الفايدة |
 |---|:--:|---|---|
-| `UPSTASH_REDIS_REST_URL` | ✅ على Vercel | Vercel | رابط REST (يبدأ بـ `https://`) للتخزين السحابي |
-| `UPSTASH_REDIS_REST_TOKEN` | ✅ معاه | Vercel | توكن Upstash |
+| `SUPABASE_URL` | ✅ على Vercel | Vercel / Render | رابط مشروع Supabase (يبدأ بـ `https://`) — التخزين الدائم الموصى به |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ معاه | Vercel / Render | مفتاح `service_role` السري — للسيرفر فقط ولا يُنشر في الكود |
+| `UPSTASH_REDIS_REST_URL` | ⚪ Legacy | Vercel | بديل قديم: رابط REST (يبدأ بـ `https://`) لو مش موصّل بـ Supabase |
+| `UPSTASH_REDIS_REST_TOKEN` | ⚪ معاه | Vercel | بديل قديم: توكن Upstash |
 | `APP_URL` | ✅ للإنتاج | Vercel / Render | الدومين النهائي — روابط الدفع + واتساب + استعادة كلمة السر |
 | `ADMIN_EMAIL` | ✅ للمالك | أي وضع | الافتراضي `aliielramal@gmail.com` |
 | `ADMIN_PASSWORD` | ✅ عند تجهيز المالك لأول مرة | أي وضع | كلمة سر سرية تتحول إلى scrypt؛ لا يُعاد ضبطها بعد تغييرها من الحساب |

@@ -499,4 +499,14 @@ test('setup lockout renders the hosting-fix guide, not the misleading offline pa
   assert.match(html, /ADMIN_PASSWORD/);
   assert.match(html, /Settings → Environment Variables/);
   assert.match(html, /قيم محتاجة تصحيح: <code dir="ltr">APP_URL<\/code>/);
+
+  /* التوصية الحالية Supabase: لو الناقص مفاتيح Supabase الخطوات بتوجّه لـ supabase.com */
+  ui.evaluate(`lastSetupError = { code: 'STORAGE_UNAVAILABLE',
+    detail: 'السبب: قاعدة البيانات الدائمة (Supabase PostgreSQL) مش متوصلة',
+    setup: { serverless: true, storage: 'postgres', missing: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], invalid: [] } };`);
+  const html2 = ui.evaluate('setupPageHTML()');
+  assert.match(html2, /supabase\.com/);
+  assert.match(html2, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.match(html2, /0001_init\.sql/);
+  assert.doesNotMatch(html2, /upstash\.com/);          // خطوات القاعدة الفعلية بس
 });

@@ -1,9 +1,10 @@
 'use strict';
-/* Vercel requires Upstash REST credentials and a private ADMIN_PASSWORD on first setup.
-   Vercel → Settings → Environment Variables:
-     UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN   (التخزين الدائم — إجباري)
-     APP_URL                                             (الدومين بتاعك)
-     ADMIN_PASSWORD (أو ADMIN_PASSWORD_HASH)             (حساب صاحب المطعم)
-   وبعدين Redeploy. الشرح خطوة بخطوة: docs/VERCEL-UPSTASH.md
-   الفحص: npm run check:env -- --vercel */
+/* /api/* rewrites use the same transaction/commit-before-response handler.
+   Vercel → Settings → Environment Variables (first setup):
+     SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY         (التخزين الدائم — إجباري، للسيرفر بس)
+     APP_URL                                          (الدومين بتاعك)
+     ADMIN_PASSWORD (أو ADMIN_PASSWORD_HASH)          (حساب صاحب المطعم — سري)
+   وبعدين Redeploy. الشرح خطوة بخطوة: docs/SUPABASE.md
+   الفحص: npm run check:env -- --vercel
+   (بيانات Upstash القديمة لسه مدعومة كـLegacy — docs/VERCEL-UPSTASH.md) */
 module.exports = require('../server/index').serverlessHandler;

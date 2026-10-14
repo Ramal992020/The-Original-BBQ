@@ -43,6 +43,7 @@ async function worker(t, env = {}) {
       ADMIN_PASSWORD: PASSWORD, ADMIN_PASSWORD_HASH: '', NODE_ENV: 'production',
       SEED_DEMO: '0', DEMO_LOGIN: '0', ALLOW_DEMO_PAYMENTS: '0', ALLOW_CONSOLE_MAIL: '0',
       VERCEL: '', AWS_LAMBDA_FUNCTION_NAME: '', UPSTASH_REDIS_REST_URL: '', UPSTASH_REDIS_REST_TOKEN: '',
+      SUPABASE_URL: '', SUPABASE_SERVICE_ROLE_KEY: '',
       RESEND_API_KEY: '', ...env,
     },
   });
@@ -260,8 +261,15 @@ test('serverless storage/owner misconfiguration fails closed and never writes te
     assert.equal(r.status, 503); assert.equal(r.data.code, 'STORAGE_UNAVAILABLE');
     /* الـ503 بيشرح نفسه: تقرير تشخيص عام + سبب واضح، من غير أي قيمة سرية. */
     assert.ok(r.data.setup && r.data.setup.serverless === true, '503 carries a public setup report');
-    assert.ok(r.data.setup.missing.includes('UPSTASH_REDIS_REST_URL') && r.data.setup.missing.includes('UPSTASH_REDIS_REST_TOKEN'), 'missing lists the Redis credentials');
-    assert.ok((r.data.detail || '').includes('Upstash'), '503 carries the human-readable reason');
+    /* التوصية الحالية Supabase؛ STORAGE=redis الصريح لسه بيطلب بيانات Upstash. */
+    const legacyRedis = storage === 'redis';
+    const expected = legacyRedis
+      ? ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN']
+      : ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+    for (const key of expected) {
+      assert.ok(r.data.setup.missing.includes(key), `missing lists ${key}`);
+    }
+    assert.ok((r.data.detail || '').includes(legacyRedis ? 'Upstash' : 'Supabase'), '503 carries the human-readable reason');
     assert.ok(!JSON.stringify(r.data).includes(PASSWORD), 'setup report never leaks secret values');
     assert.equal(fs.existsSync(dataDir), false);
     assert.equal((await w.req('POST', '/api/auth/signup', { body: CLIENT })).status, 503);

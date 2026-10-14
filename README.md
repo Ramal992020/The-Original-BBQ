@@ -7,7 +7,7 @@
 ---
 
 > **📦 لرفعه على GitHub ثم Vercel:** كل حاجة جاهزة — شوف ملف **[DEPLOY.md](DEPLOY.md)** (خطوة بخطوة بالتفاصيل + جدول حل المشاكل، ٥ دقايق).
-> المشروع بيدعم **الوضعين**: سيرفر عادي (ملفات JSON + بث لحظي) و Vercel (سيرفرلس + Upstash Redis) — بيختار لوحده.
+> المشروع بيدعم **الوضعين**: سيرفر عادي (ملفات JSON + بث لحظي) و Vercel (سيرفرلس + **Supabase PostgreSQL** — أو Upstash كـLegacy) — بيختار لوحده.
 
 ## ١) التشغيل في ٣٠ ثانية
 
@@ -175,7 +175,8 @@ original-bbq-app/
 ├── server/
 │   ├── index.js      السيرفر: كل الراوتات + فحص الصلاحيات + الإشعارات (SSE)
 │   ├── auth.js       الحسابات، تشفير كلمات السر (scrypt+Salt)، الجلسات، الأدوار
-│   ├── store.js      قاعدة البيانات (snapshot ذري على القرص أو Upstash Redis)
+│   ├── store.js      قاعدة البيانات (snapshot ذري على القرص أو Supabase PostgreSQL أو Upstash Redis)
+│   ├── supabase.js   اتصال Supabase عبر PostgREST (fetch فقط — بدون مكتبات)
 │   ├── seed.js       المنيو والإعدادات + تجهيز المالك من إعداد خاص
 │   ├── env.js        تحميل .env المحلي (الاستضافة ليها الأولوية)
 │   ├── deploy-env.js تقرير جاهزية النشر + كلمات سر الطاقم من البيئة
@@ -188,6 +189,7 @@ original-bbq-app/
 │   ├── test-ui.js    اختبارات الثيم والتوجيه والمنيو والسلة (npm run test:ui)
 │   ├── test-vercel.js  اختبارات وضع Vercel/Redis (npm run test:vercel)
 │   ├── test-real.js    الاستمرار/التزامن/فشل الحفظ/ترقية البيانات (npm run test:real)
+│   ├── test-supabase.js الدورة الكاملة على تخزين Supabase (npm run test:supabase)
 │   └── data/         بياناتك الحقيقية (بتتولد أول تشغيل — ⚠️ في .gitignore، خُد منها نسخة احتياطية)
 ├── public/
 │   ├── index.html · styles.css · app.js    واجهة العميل + لوحة الإدارة
@@ -198,12 +200,13 @@ original-bbq-app/
 ├── uploads/          الصور اللي ترفعها من لوحة الإدارة (وضع السيرفر العادي — في .gitignore)
 ├── backups/          النسخ الاحتياطية (npm run reset — في .gitignore)
 ├── api/[...route].js نقطة دخول Vercel (سيرفرلس)
-├── tools/            أدوات مساعدة (محاكي Upstash + فحص جاهزية النشر)
+├── supabase/migrations/  SQL migrations لجداول Supabase + الحماية (RLS) + دوال الحفظ الذري
+├── tools/            أدوات مساعدة (محاكيو Upstash/Supabase + فحص جاهزية النشر + ترحيل النسخ الاحتياطية)
 ├── vercel.json       إعدادات Vercel (جاهزة)
 ├── .env.example      كل متغيرات البيئة موثّقة (انسخه لـ .env للتشغيل المحلي)
 ├── .gitignore        بيمنع رفع بياناتك الحقيقية وأسرارك على GitHub
 ├── DEPLOY.md         دليل النشر خطوة بخطوة (GitHub → Vercel / Render / VPS)
-└── docs/             docs/VERCEL-UPSTASH.md — ربط Upstash + متغيرات Vercel بالتفصيل
+└── docs/             docs/SUPABASE.md (الإعداد الموصى به) + docs/VERCEL-UPSTASH.md (Legacy)
 ```
 
 **أوامر مفيدة:**
@@ -215,8 +218,10 @@ npm run reset        # نسخة احتياطية + تصفير البيانات
 npm run test:ui      # منطق الواجهة (بدون مكتبات إضافية)
 npm run test:vercel  # اختبار وضع Vercel (سيرفرلس + Redis)
 npm run test:real    # الطلبات والتسجيل مع إعادة التشغيل ونسخ متعددة
+npm run test:supabase # الدورة الكاملة على تخزين Supabase (على محاكي محلي)
 npm run test:all     # كل الاختبارات
 npm run fake-redis   # محاكي Upstash للتجربة المحلية
+npm run import:backup # ترحيل نسخة احتياطية إلى Supabase/القاعدة الحالية
 ```
 
 ---
@@ -262,9 +267,9 @@ DEMO_LOGIN=0 npm start
 - ✅ كلمات السر متشفرة (scrypt + salt)، الجلسات بتتقفل بعيد عن الحساب المعطّل، وفي حماية من تكرار محاولات الدخول.
 - ✅ كل صلاحية بتتفحص على السيرفر، وأسعار الطلبات بتتحسب على السيرفر (مش من المتصفح).
 - ✅ منع الوصول للملفات خارج `public/` (path traversal متغطي باختبار).
-- ✅ **التخزين** snapshot ذري على قرص دائم لسيرفر واحد، أو Upstash Redis مشترك لعدة نسخ/Vercel.
-  كل طلب Redis يحمّل البيانات الحديثة بقفل موزع، وتُحفظ البيانات قبل رد النجاح؛ لا يوجد بديل `/tmp`.
-  للمشروعات الكبيرة جدًا استخدم PostgreSQL بدل تحميل مجموعات كاملة في ذاكرة كل طلب.
+- ✅ **التخزين** snapshot ذري على قرص دائم لسيرفر واحد، أو **Supabase PostgreSQL** (جداول حقيقية + RLS + حفظ ذري — الموصى به للنشر)،
+  أو Upstash Redis (Legacy) لعدة نسخ/Vercel. كل طلب على قاعدة مشتركة بياخد قفل موزع ويحمّل البيانات الحديثة،
+  وتُحفظ البيانات قبل رد النجاح؛ لا يوجد بديل `/tmp` أبدًا. مفاتيح الخدمة (مثل `SUPABASE_SERVICE_ROLE_KEY`) على السيرفر فقط.
 - ✅ **استعادة كلمة السر بالبريد** تحتاج `RESEND_API_KEY` و`MAIL_FROM`. بدونها تُعرض رسالة عدم توفر الخدمة،
   ولا يدّعي التطبيق إرسال بريد. النقل بالـconsole مسموح فقط للاختبار المحلي الصريح.
 - ✅ **مفاتيح الواتساب والدفع** بتتخزن على السيرفر بس، وبتتعرض في اللوحة **مقنّعة** (آخر ٤ حروف)، ومستحيل تظهر في أي API للعميل.
@@ -277,7 +282,7 @@ DEMO_LOGIN=0 npm start
 
 ### اختبارات التخزين والطلبات الحقيقية
 
-`npm run test:all` يشمل اختبارات API والواجهة وإعادة التشغيل، النسخ الدافئة المتعددة، الطلبات المتزامنة، وعدم تكرار الطلب/إخفاء أخطاء الحفظ. كل البيانات معزولة؛ اختبار Redis يستخدم محاكيًا محليًا وليس اتصالًا سحابيًا فعليًا.
+`npm run test:all` يشمل اختبارات API والواجهة وإعادة التشغيل، النسخ الدافئة المتعددة، الطلبات المتزامنة، وعدم تكرار الطلب/إخفاء أخطاء الحفظ. كل البيانات معزولة؛ اختبارات Redis وSupabase تستخدم محاكيات محلية وليست اتصالًا سحابيًا فعليًا (الاتصال الحقيقي بيتأكد منه `npm run check:env` بعد إعداد متغيراتك).
 
 ## ٦.٥) النشر على Vercel (سيرفرلس)
 
@@ -285,22 +290,22 @@ DEMO_LOGIN=0 npm start
 
 | | سيرفر عادي (VPS / Render) | Vercel (سيرفرلس) |
 |---|---|---|
-| التخزين | ملفات JSON في `server/data` | **Upstash Redis** (REST — بدون أي مكتبات) |
+| التخزين | ملفات JSON في `server/data` | **Supabase PostgreSQL** (موصى به) أو Upstash Redis (Legacy) |
 | البث اللحظي | ✅ SSE + تحديث احتياطي | 🔄 تحديث دوري كل ٥ ثوانٍ أثناء فتح التطبيق |
 | رفع الصور | على القرص | مخزّنة في قاعدة البيانات وبتتقدم من `/api/img/:id` |
 | الباقي (طلبات، صلاحيات، دفع، واتساب، إشعارات) | ✅ | ✅ |
 
 **الخطوات بالتفصيل في [DEPLOY.md](DEPLOY.md)** — الملخص:
 1. ارفع الريبو على GitHub.
-2. اعمل قاعدة **Upstash Redis** مجانية وخُد `REST URL` + `TOKEN`.
+2. اعمل مشروع **Supabase** مجاني وشغّل `supabase/migrations/0001_init.sql` من SQL Editor، وخُد `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`.
 3. على [vercel.com/new](https://vercel.com/new) اعمل Import للريبو وضيف متغيرات البيئة:
-   `UPSTASH_REDIS_REST_URL` · `UPSTASH_REDIS_REST_TOKEN` · `ADMIN_EMAIL` · `ADMIN_PASSWORD` · `APP_URL` · `DEMO_LOGIN=0`
+   `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` · `ADMIN_EMAIL` · `ADMIN_PASSWORD` · `APP_URL` · `DEMO_LOGIN=0`
 4. **Redeploy** بعد أي تغيير في المتغيرات (مش بتتطبّق على deploy قديم).
-5. اتأكد: `/api/health` → `"storage":"redis"` و`"persistent":true` و`"ownerFromEnv":true`،
+5. اتأكد: `/api/health` → `"storage":"postgres"` و`"persistent":true` و`"ownerFromEnv":true`،
    أو تبويب **🛠️ النظام** في لوحة الإدارة — أو `npm run check:env -- --vercel` من جهازك قبل النشر.
 
-> 📌 **الدليل المصغّر بالتفصيل (من إنشاء قاعدة Upstash لحد Redeploy + جدول بكل غلطة شايعة):**
-> [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md)
+> 📌 **الدليل المصغّر بالتفصيل (من إنشاء مشروع Supabase لحد Redeploy + ترحيل البيانات + جدول بكل غلطة شايعة):**
+> [`docs/SUPABASE.md`](docs/SUPABASE.md) — ولو بتستخدم Upstash: [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md)
 
 **عايز تجرّبه محليًا في وضع Vercel؟**
 ```bash
@@ -310,7 +315,7 @@ STORAGE=redis UPSTASH_REDIS_REST_URL=http://127.0.0.1:4599 \
 npm run test:vercel                             # ٢٣ اختبار آلي لوضع Vercel
 ```
 
-> ⚖️ **أي واحد تختار؟** لو عايز أسهل إعداد → Vercel + Upstash. لو عايز اللحظية القصوى (الطلب يظهر للكاشير
+> ⚖️ **أي واحد تختار؟** لو عايز أسهل إعداد → Vercel + Supabase. لو عايز اللحظية القصوى (الطلب يظهر للكاشير
 > في نفس اللحظة) → **Render** من نفس الريبو بنفس الكود مع قرص دائم أو Redis (فيه قسم كامل في DEPLOY.md).
 
 ## ٧) اللي ممكن نضيفه بعد كده

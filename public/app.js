@@ -153,18 +153,28 @@ async function loadBootstrap() {
 /* ============================== ٣٫٥) صفحة إصلاح الإعداد الناقص ==============================
    لما السيرفر يقفل كل الـAPI برسالة 503 (STORAGE_UNAVAILABLE / OWNER_NOT_CONFIGURED)
    الصفحة القديمة كانت بتقول «مش قادرين نوصل للمطعم / تأكد من الإنترنت» — وده تضليل.
-   هنا بنعرض السبب الحقيقي وخطوات الإصلاح على الاستضافة (Vercel/Upstash) بالصوت والصورة. */
+   هنا بنعرض السبب الحقيقي وخطوات الإصلاح على الاستضافة (Vercel/Supabase) بالصوت والصورة. */
 let lastSetupError = null;
 const SETUP_CODES = ['STORAGE_UNAVAILABLE', 'OWNER_NOT_CONFIGURED'];
 const isSetupError = (e) => !!e && SETUP_CODES.includes(e.code);
 
 function setupStepsHTML(code) {
-  const steps = code === 'STORAGE_UNAVAILABLE' ? [
+  /* الخطوات بتتبع القاعدة اللي التطبيق محتاجها فعلًا: Supabase أولًا، وLegacy لو الناقص Upstash */
+  const missing = (lastSetupError && lastSetupError.setup && lastSetupError.setup.missing) || [];
+  const legacyUpstash = code === 'STORAGE_UNAVAILABLE' && missing.some((k) => String(k).startsWith('UPSTASH'));
+  const upstashSteps = [
     'افتح <a href="https://upstash.com" target="_blank" rel="noopener" style="color:var(--link)">upstash.com</a> وأنشئ قاعدة Redis مجانية (Upstash Redis).',
     'من صفحة القاعدة انسخ <b>REST URL</b> و<b>REST Token</b> — الرابط لازم يبدأ بـ <code dir="ltr">https://</code> (رابط <code dir="ltr">redis://</code> مش هيشتغل).',
     'على Vercel: المشروع → <b>Settings → Environment Variables</b> → أضف <code dir="ltr">UPSTASH_REDIS_REST_URL</code> و<code dir="ltr">UPSTASH_REDIS_REST_TOKEN</code> وفعّلهم لـ Production وPreview.',
     'اعمل <b>Redeploy</b> من تبويب Deployments لآخر نسخة — المتغيرات بتتقرأ مع النشر مش مع التصفح.',
-  ] : [
+  ];
+  const steps = code === 'STORAGE_UNAVAILABLE' ? (legacyUpstash ? upstashSteps : [
+    'افتح <a href="https://supabase.com" target="_blank" rel="noopener" style="color:var(--link)">supabase.com</a> وأنشئ مشروع جديد (الخطة المجانية كافية).',
+    'من <b>SQL Editor</b> شغّل ملف المشروع <code dir="ltr">supabase/migrations/0001_init.sql</code> كامل — بيعمل الجداول والحماية ودوال الحفظ الذري.',
+    'من <b>Settings → API</b> انسخ <b>Project URL</b> و<b>service_role</b> المفتاح السري — ده للسيرفر بس، مش بيتحط في الواجهة أبدًا.',
+    'على Vercel: المشروع → <b>Settings → Environment Variables</b> → أضف <code dir="ltr">SUPABASE_URL</code> و<code dir="ltr">SUPABASE_SERVICE_ROLE_KEY</code> (وكمان <code dir="ltr">APP_URL</code> و<code dir="ltr">ADMIN_PASSWORD</code>) وفعّلهم لـ Production وPreview.',
+    'اعمل <b>Redeploy</b> من تبويب Deployments لآخر نسخة — المتغيرات بتتقرأ مع النشر مش مع التصفح.',
+  ]) : [
     'على Vercel: المشروع → <b>Settings → Environment Variables</b> → أضف <code dir="ltr">ADMIN_PASSWORD</code> (٦ أحرف على الأقل) — واختياريًا <code dir="ltr">ADMIN_EMAIL</code> لإيميل صاحب المطعم.',
     'لو المتغير موجود بالفعل ومتأكد من قيمته، اعمل <b>Redeploy</b> — الإضافة بعد النشر مش بتسري إلا بنشر جديد.',
   ];
@@ -184,7 +194,7 @@ function setupPageHTML() {
       ${code ? setupStepsHTML(code) : '<p class="small muted" style="margin:8px 0 0">افتح <code dir="ltr">/api/health</code> عشان تشوف المتغيرات الناقصة بالظبط.</p>'}
       ${setup && setup.missing && setup.missing.length ? `<p class="small" style="margin:10px 0 0">الناقص حاليًا: ${chips(setup.missing)}</p>` : ''}
       ${setup && setup.invalid && setup.invalid.length ? `<p class="small" style="margin:6px 0 0">قيم محتاجة تصحيح: ${chips(setup.invalid)}</p>` : ''}
-      <p class="small muted" style="margin:10px 0 0">بعد الإصلاح افتح <code dir="ltr">/api/health</code> ولازم تلاقي <code dir="ltr">ok:true</code> — الشرح الكامل خطوة بخطوة في ملف المشروع <code dir="ltr">docs/VERCEL-UPSTASH.md</code>.</p>
+      <p class="small muted" style="margin:10px 0 0">بعد الإصلاح افتح <code dir="ltr">/api/health</code> ولازم تلاقي <code dir="ltr">ok:true</code> — الشرح الكامل خطوة بخطوة في ملف المشروع <code dir="ltr">docs/SUPABASE.md</code>.</p>
       <div class="btn-row" style="margin-top:12px">
         <a class="btn btn-ghost" dir="ltr" href="/api/health" target="_blank" rel="noopener">/api/health فتح</a>
         <button class="btn btn-primary" onclick="location.reload()">إعادة المحاولة</button>
@@ -1460,7 +1470,7 @@ function adminSettingsHTML() {
   </form>
   <div class="box" style="margin-top:12px">
     <strong>التسجيل واستقبال الطلبات</strong>
-    <p class="small muted" style="margin:6px 0 0">الحسابات والطلبات محفوظة على ${S.storage === 'redis' ? 'قاعدة Upstash Redis المشتركة' : 'قرص السيرفر (يلزم قرص دائم على الاستضافة)'}. أي عميل جديد يسجل كعميل فقط. الطلب يظهر هنا بإشعار بعد حفظه، وكلمة السر لا تُعرض لأي مستخدم.</p>
+    <p class="small muted" style="margin:6px 0 0">الحسابات والطلبات محفوظة على ${S.storage === 'postgres' ? 'قاعدة Supabase PostgreSQL الدائمة' : S.storage === 'redis' ? 'قاعدة Upstash Redis المشتركة (بديل قديم)' : 'قرص السيرفر (يلزم قرص دائم على الاستضافة)'}. أي عميل جديد يسجل كعميل فقط. الطلب يظهر هنا بإشعار بعد حفظه، وكلمة السر لا تُعرض لأي مستخدم.</p>
     <p class="small muted" style="margin:6px 0 0">${S.realtime === false ? 'تحديث تلقائي كل ٥ ثوانٍ أثناء فتح التطبيق.' : 'إشعارات لحظية مع تحديث دوري احتياطي.'} الدفع الحقيقي متاح عند التوصيل، أو بعد إعداد Stripe / Paymob.</p>
   </div>`;
 }
@@ -1472,16 +1482,17 @@ function adminSystemHTML() {
   if (!r) return `<div class="empty"><div class="big">⏳</div><h3>بيحمّل تقرير النظام…</h3></div>`;
 
   const ICON = { ok: '✅', missing: '❌', invalid: '⚠️', optional: '⚪' };
-  const persistent = r.storage === 'redis' || !r.serverless;
-  const ping = r.redis || {};
+  const persistent = r.storage === 'postgres' || r.storage === 'redis' || !r.serverless;
+  const ping = r.database || r.redis || {};
+  const dbLabel = r.storage === 'postgres' ? 'Supabase' : 'Upstash';
   const note = (t, cls) => `<div class="box" style="margin-top:10px;border-color:${cls === 'danger' ? 'var(--red)' : 'var(--gold)'};border-width:1.5px">
       <div class="row" style="align-items:flex-start;gap:8px"><span style="font-size:18px">${cls === 'danger' ? '🚨' : '⚠️'}</span><span class="small" style="flex:1">${h(t)}</span></div></div>`;
 
   return `
   <div class="kpis">
-    <div class="kpi ${persistent ? 'hl' : ''}"><b>${persistent ? '✔' : '✖'}</b><span>تخزين ${r.storage === 'redis' ? 'Upstash (دائم)' : 'مؤقت'}</span></div>
+    <div class="kpi ${persistent ? 'hl' : ''}"><b>${persistent ? '✔' : '✖'}</b><span>تخزين ${r.storage === 'postgres' ? 'Supabase (دائم)' : r.storage === 'redis' ? 'Upstash (دائم)' : 'مؤقت'}</span></div>
     <div class="kpi"><b>${r.serverless ? 'سيرفرلس' : 'سيرفر'}</b><span>طريقة التشغيل${r.serverless ? ' (Vercel)' : ''}</span></div>
-    <div class="kpi ${ping.ok ? 'hl' : ''}"><b>${ping.ok ? ping.ms + 'ms' : ping.skipped ? '—' : '✖'}</b><span>زمن الرد من Upstash</span></div>
+    <div class="kpi ${ping.ok ? 'hl' : ''}"><b>${ping.ok ? ping.ms + 'ms' : ping.skipped ? '—' : '✖'}</b><span>زمن الرد من ${dbLabel}</span></div>
     <div class="kpi ${r.credentials.ownerFromEnv && r.credentials.ownerConfigured ? 'hl' : ''}"><b>${r.credentials.ownerFromEnv && r.credentials.ownerConfigured ? '✔' : '⚠'}</b><span>حساب صاحب المطعم من البيئة</span></div>
   </div>
 
@@ -1529,14 +1540,15 @@ function adminSystemHTML() {
   </div>
 
   <div class="box" style="margin-top:12px">
-    <strong>إزاي تظبطهم على Vercel؟</strong>
+    <strong>إزاي تظبطهم على الاستضافة؟</strong>
     <ol class="small" style="margin:8px 0 0;padding-inline-start:20px;line-height:1.9">
-      <li>console.upstash.com → Create Database (Free) → انسخ <b>UPSTASH_REDIS_REST_URL</b> و <b>UPSTASH_REDIS_REST_TOKEN</b> من قسم REST API.</li>
+      <li>supabase.com → New Project → من <b>SQL Editor</b> شغّل <code>supabase/migrations/0001_init.sql</code>.</li>
+      <li>Settings → API → انسخ <b>SUPABASE_URL</b> و <b>SUPABASE_SERVICE_ROLE_KEY</b> (السرّي — للسيرفر بس).</li>
       <li>Vercel → المشروع → <b>Settings → Environment Variables</b> → ضيف: المتغيرين دول + <b>APP_URL</b> + <b>ADMIN_PASSWORD</b> (+ <code>ADMIN_EMAIL</code> لو عايز إيميل تاني).</li>
       <li><b>Deployments → ⋯ → Redeploy</b> — من غير redeploy المتغيرات مش بتتطبّق.</li>
       <li>رجّع هنا واضغط «تحديث» — لازم تشوف ✔ جنب كل متغير إجباري.</li>
     </ol>
-    <p class="small muted" style="margin:8px 0 0">الشرح الكامل بالصور: <code>docs/VERCEL-UPSTASH.md</code> في الريبو.</p>
+    <p class="small muted" style="margin:8px 0 0">الشرح الكامل خطوة بخطوة: <code>docs/SUPABASE.md</code> في الريبو (وياريت تراجع <code>docs/VERCEL-UPSTASH.md</code> لو لسه بتستخدم Upstash كـ Legacy).</p>
   </div>`;
 }
 
