@@ -127,7 +127,7 @@ label.lbl { display: block; font-size: 12.5px; color: var(--muted); margin-botto
   width: 38px; height: 38px; border-radius: 12px; flex: none; overflow: hidden;
   display: grid; place-items: center; box-shadow: 0 4px 14px rgba(239,65,54,.35);
 }
-.header .logo img { width: 100%; height: 100%; display: block; }
+.header .logo img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .header .brand-name { font-weight: 800; font-size: 15px; white-space: nowrap; }
 .header .brand-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn {
@@ -338,9 +338,13 @@ label.lbl { display: block; font-size: 12.5px; color: var(--muted); margin-botto
 @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.96); } }
 
 .footer { margin-top: 34px; padding: 22px 16px 10px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
-.footer .logo-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.footer .logo-row {
+  display: flex; align-items: center; width: fit-content; max-width: 100%;
+  margin-bottom: 14px; padding: 7px 10px; border: 1px solid #F1D9CE;
+  border-radius: 14px; background: #FFF9F4;
+}
 .footer .logo-row strong { color: var(--text); }
-.footer .footer-logo { height: 42px; width: auto; max-width: 100%; }
+.footer .footer-logo { height: 88px; width: auto; max-width: 100%; object-fit: contain; }
 .footer .socials { display: flex; gap: 8px; margin: 12px 0 6px; }
 .footer .socials a { width: 38px; height: 38px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; font-size: 16px; }
 .credit { text-align: center; font-size: 11.5px; padding: 14px 0 6px; color: var(--muted-2); }

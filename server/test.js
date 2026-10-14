@@ -530,6 +530,13 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('ملف الكود موجود', appjs.status === 200);
   const img = await fetch(BASE + '/img/ai-hero.jpg');
   check('صور التطبيق (AI) موجودة', img.status === 200 && (img.headers.get('content-type') || '').includes('jpeg'));
+  const manifest = await fetch(BASE + '/manifest.webmanifest');
+  const manifestBody = await manifest.text();
+  check('المانيفست بيستخدم أيقونات المطعم الأصلية', manifest.status === 200 && manifestBody.includes('app-icon-512.png') && manifestBody.includes('app-icon-maskable-512.png'));
+  const iconPaths = ['/img/logo.svg', '/img/logo-mark.svg', '/img/app-icon-192.png', '/img/app-icon-512.png', '/img/app-icon-maskable-512.png', '/img/apple-touch-icon.png'];
+  const icons = await Promise.all(iconPaths.map((path) => fetch(BASE + path)));
+  check('شعار المطعم وأيقونات PWA وiOS موجودة', icons.every((response) => response.status === 200));
+  check('أيقونات التثبيت بتتقدم بصيغة PNG', icons.slice(2).every((response) => (response.headers.get('content-type') || '').includes('image/png')));
   const trav = await fetch(BASE + '/%2e%2e%2fserver%2findex.js');
   const travBody = await trav.text();
   check('منع الوصول لملفات خارج public (path traversal)', (trav.status === 403 || trav.status === 404) && !travBody.includes('sessionUser'), 'status=' + trav.status);

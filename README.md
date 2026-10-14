@@ -179,7 +179,7 @@ original-bbq-app/
 ├── public/
 │   ├── index.html · styles.css · app.js    واجهة العميل + لوحة الإدارة
 │   ├── pay.html      صفحة الدفع (وضع المحاكاة — جاهزة للتجربة)
-│   └── img/          ١٨ صورة (٩ مولّدة AI + ٩ صور تطبيقك الأصلية)
+│   └── img/          الصور + شعار المطعم وأيقونات التطبيق (PWA / iOS / Android)
 ├── uploads/          الصور اللي ترفعها من لوحة الإدارة (وضع السيرفر العادي — في .gitignore)
 ├── backups/          النسخ الاحتياطية (npm run reset — في .gitignore)
 ├── api/[...route].js نقطة دخول Vercel (سيرفرلس)
