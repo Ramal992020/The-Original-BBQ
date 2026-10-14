@@ -18,6 +18,16 @@ const store = require('./store');
 const settings = () => store.find('settings', (s) => s.id === 'main') || {};
 const cfg = () => settings().paymentConfig || {};
 const currency = () => (cfg().currency || 'EGP').toUpperCase();
+const demoAllowed = () => process.env.ALLOW_DEMO_PAYMENTS === '1'
+  && process.env.NODE_ENV !== 'production' && !store.IS_SERVERLESS;
+function onlineReady() {
+  const c = cfg();
+  if (c.provider === 'demo' || !c.provider) return demoAllowed();
+  if (c.provider === 'stripe') return !!(c.stripe?.secretKey && c.stripe?.webhookSecret);
+  if (c.provider === 'paymob') return !!(c.paymob?.apiKey && c.paymob?.integrationId && c.paymob?.iframeId && c.paymob?.hmacSecret);
+  return false;
+}
+
 
 async function fetchT(url, opts = {}, ms = 20000) {
   const ac = new AbortController();
@@ -49,6 +59,7 @@ async function createPayment(order) {
   const cents = Math.round(Number(order.total) * 100);
 
   if (provider === 'demo') {
+    if (!demoAllowed()) throw new Error('الدفع التجريبي مقفول — اربط Stripe أو Paymob للدفع الحقيقي');
     const token = store.token();
     store.update('orders', order.id, { paymentProvider: 'demo', paymentRef: token, paymentUrl: `/pay.html?ref=${encodeURIComponent(order.id)}&t=${token}` });
     record(order, { ref: token, provider: 'demo', status: 'pending' });
@@ -271,6 +282,7 @@ async function handlePaymobCallback(payload, providedHmac) {
 
 /* ------------------------------ المحاكاة (demo) ------------------------------ */
 function demoInfo(ref, token) {
+  if (!demoAllowed()) return null;
   const order = store.find('orders', (o) => o.id === ref);
   if (!order) return null;
   if (order.paymentRef !== token) return null;
@@ -284,6 +296,7 @@ function demoInfo(ref, token) {
 }
 
 function demoComplete(ref, token, ok) {
+  if (!demoAllowed()) return { ok: false, error: 'الدفع التجريبي غير متاح' };
   const order = store.find('orders', (o) => o.id === ref);
   if (!order || order.paymentRef !== token) return { ok: false, error: 'رابط دفع غير صالح' };
   if (order.payment_status === 'paid') return { ok: true, status: 'paid', order };
@@ -296,7 +309,7 @@ function demoComplete(ref, token, ok) {
 async function testConfig() {
   const c = cfg();
   const provider = c.provider || 'demo';
-  if (provider === 'demo') return { ok: true, message: 'المحاكاة جاهزة — تقدر تجرّب الدفع كامل من غير أي حساب.' };
+  if (provider === 'demo') return { ok: demoAllowed(), message: demoAllowed() ? 'محاكاة للاختبار فقط — ليست عملية دفع حقيقية.' : 'المحاكاة مقفولة. فعّل Stripe أو Paymob للدفع الحقيقي، أو استخدم الدفع عند التوصيل.' };
   if (provider === 'stripe') {
     const s = c.stripe || {};
     if (!s.secretKey) return { ok: false, message: 'مفتاح Stripe السري ناقص' };
@@ -319,5 +332,5 @@ async function testConfig() {
 module.exports = {
   createPayment, verifyPayment, markPaid, markFailed, markRefunded,
   handleStripeWebhook, handlePaymobCallback, verifyStripeSignature, paymobHmac,
-  demoInfo, demoComplete, testConfig, currency,
+  demoInfo, demoComplete, demoAllowed, onlineReady, testConfig, currency,
 };

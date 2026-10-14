@@ -30,6 +30,13 @@ const check = (name, cond, extra = '') => {
     UPSTASH_REDIS_REST_TOKEN: 'test-token',
     VERCEL: '1',
     PORT: '3199',
+    BBQ_ENV_FILE: '',
+    ADMIN_EMAIL: 'aliielramal@gmail.com',
+    ADMIN_PASSWORD: 'test-owner-password',
+    ADMIN_PASSWORD_HASH: '',
+    SEED_DEMO: '0',
+    DEMO_LOGIN: '0',
+    ALLOW_DEMO_PAYMENTS: '0',
   };
 
   console.log('\n🚀 اختبار وضع Vercel (سيرفرلس + Redis) على http://127.0.0.1:3199\n');

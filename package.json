@@ -12,7 +12,9 @@
     "test:vercel": "node server/test-vercel.js",
     "fake-redis": "node tools/fake-upstash.js",
     "reset": "node server/reset.js",
-    "test:ui": "node --test server/test-ui.js"
+    "test:ui": "node --test server/test-ui.js",
+    "test:real": "node --test server/test-real.js",
+    "test:all": "npm test && npm run test:vercel && npm run test:real && npm run test:ui"
   },
   "engines": {
     "node": ">=18"
