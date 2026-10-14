@@ -730,6 +730,7 @@ async function api(req, res, u, url) {
         cat: String(b.cat || 'meals'),
         image: String(b.image || ''),
         featured: !!b.featured,
+        spicy: !!b.spicy,
         noPrice: !!b.noPrice,
         priceLabel: String(b.priceLabel || ''),
         active: b.active !== false, available: b.available !== false,
@@ -756,7 +757,7 @@ async function api(req, res, u, url) {
       const patch = {};
       for (const k of ['name', 'desc', 'cat', 'image', 'priceLabel']) if (b[k] != null) patch[k] = String(b[k]).slice(0, 400);
       for (const k of ['price', 'oldPrice', 'sort']) if (b[k] != null) patch[k] = b[k] === '' || b[k] === null ? null : Number(b[k]);
-      for (const k of ['featured', 'noPrice', 'active', 'available']) if (b[k] != null) patch[k] = !!b[k];
+      for (const k of ['featured', 'spicy', 'noPrice', 'active', 'available']) if (b[k] != null) patch[k] = !!b[k];
       patch.updatedAt = new Date().toISOString();
       const updated = store.update('menu', id, patch);
       return send(200, { item: updated });

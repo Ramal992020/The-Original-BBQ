@@ -1,0 +1,329 @@
+/* UI regression tests, with Node's built-in runner: npm run test:ui.
+   Rendering/route/theme logic is executed in a small DOM harness; no runtime dependencies.
+   This complements the API suite and the real-browser/mobile checks, not a browser replacement. */
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const PUBLIC = path.join(__dirname, '..', 'public');
+const source = (file) => fs.readFileSync(path.join(PUBLIC, file), 'utf8');
+const appSource = source('app.js').split('(async function boot()')[0];
+const themeSource = source('theme.js');
+
+const fixture = {
+  settings: { name: 'The Original BBQ', tagline: 'مشاوي على الفحم', currency: 'ج.م', deliveryFee: 20,
+    freeDeliveryOver: 300, minOrder: 60, deliveryEta: '٤٥ دقيقة', forceState: 'open',
+    promos: [{ code: 'BBQ10', type: 'percent', value: 10, min: 150 }], addons: {}, statuses: [], payments: [] },
+  categories: [{ id: 'meals', name: 'وجبات' }, { id: 'rolls', name: 'رول ساندويتش' }, { id: 'offers', name: 'عروض' }],
+  menu: [
+    { id: 'm1', cat: 'meals', name: 'ميكس جريل', desc: 'على الفحم البلدي', price: 240, featured: true, image: '/img/ai-meals.jpg' },
+    { id: 'm2', cat: 'meals', name: 'شيش طاووق', desc: 'فراخ متبّلة', price: 190, spicy: true },
+    { id: 'r1', cat: 'rolls', name: 'أوريجينال رول', price: 80 },
+    { id: 'o1', cat: 'offers', name: 'عرض رول', noPrice: true, price: null },
+  ],
+};
+
+function harness({ preference, deniedStorage = false, hash = '#/orders' } = {}) {
+  const saved = new Map(preference === undefined ? [] : [['bbq_theme', preference]]);
+  const elements = new Map();
+  const events = new Map();
+  class Element {
+    constructor() {
+      this.attributes = new Map(); this.style = {}; this.innerHTML = ''; this.textContent = '';
+      this.classes = new Set(); this.isConnected = true;
+      this.classList = {
+        add: (v) => this.classes.add(v), remove: (v) => this.classes.delete(v), contains: (v) => this.classes.has(v),
+        toggle: (v, on) => { const yes = on === undefined ? !this.classes.has(v) : on; yes ? this.classes.add(v) : this.classes.delete(v); return yes; },
+      };
+    }
+    setAttribute(k, v) { this.attributes.set(k, String(v)); }
+    getAttribute(k) { return this.attributes.get(k) ?? null; }
+    appendChild(el) { elements.set('#' + el.id, el); }
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    addEventListener() {}
+    remove() { elements.delete('#' + this.id); }
+    focus() {}
+  }
+  const root = new Element(), meta = new Element(), view = new Element(), body = new Element();
+  elements.set('#view', view);
+  const document = {
+    documentElement: root, body, activeElement: null,
+    querySelector: (s) => s === 'meta[name="theme-color"]' ? meta : elements.get(s) || null,
+    querySelectorAll: () => [], createElement: () => new Element(), addEventListener() {},
+  };
+  const window = {
+    addEventListener: (name, fn) => { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); },
+    dispatchEvent: (event) => { for (const fn of events.get(event.type) || []) fn(event); },
+    scrollTo() {}, matchMedia: () => ({ matches: true }), // A light OS must not replace the design's day default.
+  };
+  const localStorage = {
+    getItem: (k) => { if (deniedStorage) throw new Error('storage blocked'); return saved.get(k) ?? null; },
+    setItem: (k, v) => { if (deniedStorage) throw new Error('storage blocked'); saved.set(k, String(v)); },
+    removeItem: (k) => { if (deniedStorage) throw new Error('storage blocked'); saved.delete(k); },
+  };
+  class CustomEvent { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } }
+  const context = vm.createContext({ window, document, localStorage, location: { hash }, URL, URLSearchParams,
+    CustomEvent, AbortController, navigator: {}, console, setTimeout: () => 1, clearTimeout() {},
+    setInterval: () => 1, clearInterval() {}, fetch: async () => { throw new Error('Unexpected network call in UI harness'); } });
+  vm.runInContext(themeSource, context, { filename: 'theme.js' });
+  vm.runInContext(appSource, context, { filename: 'app.js' });
+  vm.runInContext(`S = ${JSON.stringify(fixture.settings)}; CATS = ${JSON.stringify(fixture.categories)}; MENU = ${JSON.stringify(fixture.menu)};`, context);
+  const evaluate = (code) => vm.runInContext(code, context);
+  return { evaluate, context, saved, root, meta, view, elements, window, document };
+}
+
+const cardIDs = (html) => [...html.matchAll(/data-menu-id="([^"]+)"/g)].map((m) => m[1]);
+
+test('day is the dark default even with a light OS preference', () => {
+  const ui = harness();
+  assert.equal(ui.evaluate('getTheme()'), 'day');
+  assert.equal(ui.root.getAttribute('data-theme'), 'day');
+  assert.equal(ui.meta.getAttribute('content'), '#0D0A08');
+  assert.equal(ui.saved.has('bbq_theme'), false);
+});
+
+test('legacy dark/light preferences are recognized without overwriting storage on boot', () => {
+  for (const [legacy, canonical] of [['dark', 'day'], ['light', 'night']]) {
+    const ui = harness({ preference: legacy });
+    assert.equal(ui.evaluate('getTheme()'), canonical);
+    assert.equal(ui.saved.get('bbq_theme'), legacy);
+  }
+});
+
+test('invalid preferences fall back to day', () => {
+  assert.equal(harness({ preference: 'unknown' }).evaluate('getTheme()'), 'day');
+});
+
+test('theme toggling persists canonical names and updates the browser theme colour', () => {
+  const ui = harness();
+  ui.evaluate('toggleTheme()');
+  assert.equal(ui.saved.get('bbq_theme'), 'night');
+  assert.equal(ui.root.getAttribute('data-theme'), 'night');
+  assert.equal(ui.meta.getAttribute('content'), '#FDF9F3');
+  assert.equal(harness({ preference: ui.saved.get('bbq_theme') }).evaluate('getTheme()'), 'night');
+  ui.evaluate('toggleTheme()');
+  assert.equal(ui.saved.get('bbq_theme'), 'day');
+});
+
+test('blocked localStorage does not break the app or in-memory theme toggles', () => {
+  const ui = harness({ deniedStorage: true });
+  ui.evaluate('toggleTheme()');
+  assert.equal(ui.evaluate('getTheme()'), 'night');
+  assert.equal(ui.evaluate('api.token'), '');
+  ui.evaluate('toggleTheme()');
+  assert.equal(ui.evaluate('getTheme()'), 'day');
+});
+
+test('another tab changing or clearing the preference updates this tab', () => {
+  const ui = harness();
+  ui.saved.set('bbq_theme', 'night');
+  ui.window.dispatchEvent({ type: 'storage', key: 'bbq_theme' });
+  assert.equal(ui.evaluate('getTheme()'), 'night');
+  ui.saved.clear();
+  ui.window.dispatchEvent({ type: 'storage', key: null });
+  assert.equal(ui.evaluate('getTheme()'), 'day');
+});
+
+test('the full logo keeps its original wide artboard and all flame colours', () => {
+  const logo = source('img/logo.svg');
+  assert.match(logo, /viewBox="0 0 841\.9 595\.3"/);
+  assert.ok((logo.match(/<path\b/g) || []).length > 30);
+  for (const colour of ['#B70000', '#EF4136', '#E82823', '#F68C1D', '#FFF200', '#9D0F14']) assert.ok(logo.includes(colour));
+  const header = harness().evaluate("headerHTML('orders')");
+  assert.match(header, /class="app-logo" src="\/img\/logo.svg(?:\?[^\"]*)?"[^>]*width="56" height="40"/);
+  assert.doesNotMatch(header, /logo-mark\.svg/);
+  assert.match(source('index.html'), /class="splash-logo" src="\/img\/logo.svg(?:\?[^\"]*)?"/);
+});
+
+test('Cairo and Tajawal are self-hosted WOFF2 fonts with their licences', () => {
+  const css = source('fonts.css');
+  assert.match(css, /font-family: 'Cairo'/);
+  assert.match(css, /font-family: 'Tajawal'/);
+  for (const match of css.matchAll(/url\('\/(fonts\/[^']+)'\)/g)) {
+    assert.equal(fs.readFileSync(path.join(PUBLIC, match[1])).subarray(0, 4).toString(), 'wOF2');
+  }
+  assert.ok(source('fonts/CAIRO-LICENSE.txt').includes('SIL OPEN FONT LICENSE'));
+  assert.ok(source('fonts/TAJAWAL-LICENSE.txt').includes('SIL OPEN FONT LICENSE'));
+  for (const file of ['index.html', 'pay.html']) {
+    assert.match(source(file), /href="\/fonts.css(?:\?[^\"]*)?"/);
+    assert.doesNotMatch(source(file), /fonts\.googleapis|fonts\.gstatic/);
+  }
+});
+
+test('payment and app use the same theme implementation and palette', () => {
+  for (const file of ['index.html', 'pay.html']) {
+    assert.match(source(file), /src="\/theme.js(?:\?[^\"]*)?"/);
+    assert.match(source(file), /href="\/styles.css(?:\?[^\"]*)?"/);
+  }
+  const css = source('styles.css');
+  for (const colour of ['#0D0A08', '#1A1410', '#221A14', '#F5EDE0', '#A89880', '#FDF9F3', '#6B5E50', '#E8E0D4']) assert.ok(css.includes(colour));
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /env\(safe-area-inset-bottom/);
+});
+
+test('ordering works at #/orders and the legacy #/menu alias', async () => {
+  for (const hash of ['#/orders', '#/menu']) {
+    const ui = harness({ hash });
+    await ui.evaluate('render()');
+    assert.match(ui.view.innerHTML, /ordering-page/);
+    assert.deepEqual(cardIDs(ui.view.innerHTML), ['m1', 'm2', 'r1', 'o1']);
+    assert.match(ui.view.innerHTML, /data-to="orders" class="nav-item active on" aria-current="page"/);
+  }
+});
+
+test('order history is a separate guest-protected route, with correct login return links', async () => {
+  const ui = harness({ hash: '#/my-orders' });
+  await ui.evaluate('render()');
+  assert.match(ui.view.innerHTML, /return=my-orders/);
+  assert.doesNotMatch(ui.view.innerHTML, /ordering-page/);
+  assert.match(ui.view.innerHTML, /data-to="my-orders" class="nav-item active on"/);
+  assert.match(source('pay.html'), /href="\/#\/my-orders"/);
+});
+
+test('menu groups come from real categories, not invented demo food', () => {
+  const html = harness().evaluate('viewsMenu(new URLSearchParams())');
+  assert.deepEqual(cardIDs(html), ['m1', 'm2', 'r1', 'o1']);
+  assert.equal((html.match(/class="menu-section"/g) || []).length, 3);
+  assert.match(html, /تصنيفات الأصناف/);
+});
+
+test('category filters accept both IDs and existing name-based links', () => {
+  const ui = harness();
+  for (const cat of ['rolls', 'رول ساندويتش']) {
+    const html = ui.evaluate(`viewsMenu(new URLSearchParams(${JSON.stringify({ cat })}))`);
+    assert.deepEqual(cardIDs(html), ['r1']);
+    assert.match(html, /data-id="rolls" aria-pressed="true"/);
+  }
+});
+
+test('Arabic search handles hamza, case and optional diacritics', () => {
+  const ui = harness();
+  for (const search of ['اوريجينال', 'أُوريجينال']) {
+    const html = ui.evaluate(`viewsMenu(new URLSearchParams(${JSON.stringify({ q: search })}))`);
+    assert.deepEqual(cardIDs(html), ['r1']);
+  }
+  assert.equal(ui.evaluate("normalizeSearch('BBQ')"), 'bbq');
+});
+
+test('search and category filters combine; empty results offer a working reset action', () => {
+  const ui = harness();
+  assert.deepEqual(cardIDs(ui.evaluate("viewsMenu(new URLSearchParams({cat:'meals',q:'شيش'}))")), ['m2']);
+  const empty = ui.evaluate("viewsMenu(new URLSearchParams({q:'zzzz'}))");
+  assert.deepEqual(cardIDs(empty), []);
+  assert.match(empty, /data-act="clear-menu"/);
+});
+
+test('sorting is stable and keeps no-price offers last for both price directions', () => {
+  const ui = harness();
+  assert.deepEqual(cardIDs(ui.evaluate("viewsMenu(new URLSearchParams({sort:'cheap'}))")), ['r1', 'm2', 'm1', 'o1']);
+  assert.deepEqual(cardIDs(ui.evaluate("viewsMenu(new URLSearchParams({sort:'pricey'}))")), ['m1', 'm2', 'r1', 'o1']);
+  assert.equal(cardIDs(ui.evaluate("viewsMenu(new URLSearchParams({sort:'hot'}))"))[0], 'm1');
+});
+
+test('currency uses Arabic digits and the configured unit; ISO SAR/EGP get natural Arabic labels', () => {
+  const ui = harness();
+  assert.equal(ui.evaluate('money(145)'), '١٤٥ ج.م');
+  ui.evaluate("S.currency = 'SAR'");
+  assert.equal(ui.evaluate('money(145)'), '١٤٥ ر.س');
+  ui.evaluate("S.currency = 'ر.س'");
+  assert.equal(ui.evaluate('money(145)'), '١٤٥ ر.س');
+  ui.evaluate("S.currency = 'EGP'");
+  assert.equal(ui.evaluate('money(145)'), '١٤٥ ج.م');
+});
+
+test('menu content and currency labels are escaped before HTML insertion', () => {
+  const ui = harness();
+  const card = ui.evaluate(`itemCardHTML({id:'x',name:'<img onerror="evil()">',desc:'<script>bad</script>',price:10})`);
+  assert.doesNotMatch(card, /<script>|<img onerror=/);
+  assert.match(card, /&lt;script&gt;/);
+  ui.evaluate("S.currency = '<svg onload=evil()>'");
+  assert.doesNotMatch(ui.evaluate('moneyHTML(10)'), /<svg/);
+});
+
+test('spicy badges are based on explicit menu data, not popularity', () => {
+  const ui = harness();
+  assert.match(ui.evaluate('itemCardHTML(MENU[1])'), /class="tag badge-hot">🔥 حار/);
+  assert.doesNotMatch(ui.evaluate('itemCardHTML(MENU[0])'), /badge-hot/);
+  assert.match(source('styles.css'), /transform: rotate\(-2deg\)/);
+});
+
+test('unavailable dishes stay visible but cannot be added from card or sheet', () => {
+  const ui = harness();
+  ui.evaluate('MENU[0].available = false; sheet.item = MENU[0]');
+  assert.match(ui.evaluate('itemCardHTML(MENU[0])'), /نفد اليوم/);
+  assert.match(ui.evaluate('itemCardHTML(MENU[0])'), /class="btn-add"[^>]*disabled/);
+  assert.match(ui.evaluate('sheetHTML()'), /data-act="sheet-add" disabled/);
+  ui.evaluate("addToCart(MENU[0], 1, [], '')");
+  assert.equal(ui.evaluate('cartCount()'), 0);
+});
+
+test('product dialogs have names, modal semantics and labelled quantity controls', () => {
+  const ui = harness();
+  ui.evaluate('sheet.item = MENU[0]');
+  const html = ui.evaluate('sheetHTML()');
+  assert.match(html, /aria-modal="true" aria-labelledby="sheetTitle"/);
+  assert.match(html, /id="sheetTitle"/);
+  assert.match(html, /aria-label="زيادة الكمية"/);
+  assert.match(html, /aria-label="إغلاق تفاصيل الصنف"/);
+});
+
+test('add-to-cart retains addons, quantities, notes and saved state', () => {
+  const ui = harness();
+  ui.evaluate("addToCart(MENU[0], 2, [{name:'صوص إضافي',price:10}], 'من غير شطة')");
+  assert.equal(ui.evaluate('cartCount()'), 2);
+  const saved = JSON.parse(ui.saved.get('bbq_cart'));
+  assert.equal(saved[0].qty, 2);
+  assert.equal(saved[0].note, 'من غير شطة');
+  assert.equal(saved[0].addons[0].price, 10);
+  assert.equal(ui.evaluate('cartTotals().subtotal'), 500);
+  assert.equal(ui.evaluate('cartTotals().delivery'), 0);
+  assert.equal(ui.evaluate('cartTotals().total'), 500);
+});
+
+test('cart discounts and delivery remain consistent after the UI redesign', () => {
+  const ui = harness();
+  ui.evaluate("addToCart(MENU[0], 1, [{name:'صوص',price:10}], ''); promoCode = 'BBQ10'");
+  assert.equal(ui.evaluate('cartTotals().subtotal'), 250);
+  assert.equal(ui.evaluate('cartTotals().delivery'), 20);
+  assert.equal(ui.evaluate('cartTotals().discount'), 25);
+  assert.equal(ui.evaluate('cartTotals().total'), 245);
+});
+
+test('floating cart is a keyboard-accessible button and hides on checkout/cart/admin', () => {
+  const ui = harness();
+  ui.evaluate("addToCart(MENU[0], 1, [], '')");
+  const bar = ui.elements.get('#cartBar');
+  assert.equal(bar.type, 'button');
+  assert.equal(bar.tabIndex, 0);
+  assert.equal(bar.classList.contains('show'), true);
+  assert.match(bar.getAttribute('aria-label'), /عرض السلة/);
+  for (const route of ['cart', 'checkout', 'admin', 'login']) {
+    ui.evaluate(`location.hash = '#/${route}'; renderCartBar()`);
+    assert.equal(bar.tabIndex, -1);
+    assert.equal(bar.getAttribute('aria-hidden'), 'true');
+    assert.equal(bar.classList.contains('show'), false);
+  }
+});
+
+test('staff retain their admin navigation, while customers do not see it', () => {
+  const ui = harness();
+  assert.doesNotMatch(ui.evaluate("navHTML('orders')"), /data-to="admin"/);
+  ui.evaluate("ME = {role:'admin'}");
+  assert.match(ui.evaluate("navHTML('orders')"), /data-to="admin"/);
+  assert.match(ui.evaluate("headerHTML('orders')"), /id="notifBtn"/);
+});
+
+
+test('admin forms are rebound after soft refresh rather than submitting native GET requests', () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.elements.set('#adminBody', { innerHTML: '' });
+  ui.evaluate("ME = {role:'admin'}; AD.tab = 'menu'; AD.editing = {...MENU[0]}; let binds = 0; bindPage = () => { binds++; }; softRefreshAdmin()");
+  assert.equal(ui.evaluate('binds'), 1);
+  assert.match(ui.elements.get('#adminBody').innerHTML, /id="menuForm"/);
+  assert.match(ui.elements.get('#adminBody').innerHTML, /name="spicy"/);
+  assert.match(ui.elements.get('#adminBody').innerHTML, /name="available"/);
+});
