@@ -342,7 +342,7 @@ test('the system report shows masked values and never leaks secrets', () => {
   const ui = harness({ hash: '#/admin' });
   ui.evaluate(`ME = {role:'admin'}; AD.system = {
     serverless: true, storage: 'redis', redis: { ok: true, ms: 12 },
-    credentials: { adminFromEnv: true, adminEmail: 'admin@bbq.app', note: 'note' },
+    credentials: { ownerFromEnv: true, ownerEmail: 'owner@bbq.test', ownerConfigured: true, note: 'note' },
     warnings: [{ level: 'danger', message: 'warning text' }],
     vars: [
       { key: 'UPSTASH_REDIS_REST_TOKEN', label: 'توكن', hint: 'hint', level: 'required', active: true, present: true, value: '••••••wxyz', status: 'ok' },
@@ -361,4 +361,117 @@ test('the system report shows masked values and never leaks secrets', () => {
   assert.match(html, /hint/);                      // and how to fix what is missing
   ui.evaluate('AD.system = null');
   assert.match(ui.evaluate('adminSystemHTML()'), /⏳/);   // loading state, not a crash
+});
+
+test('real login/signup never publish demo credentials and quick login is opt-in', () => {
+  const ui = harness();
+  const login = ui.evaluate("authPageHTML('login', new URLSearchParams())");
+  assert.doesNotMatch(login, /data-act="demo"|admin123|super123|demo123|admin@bbq/);
+  assert.match(login, /autocomplete="current-password"/);
+  assert.match(login, /data-form-error role="alert"/);
+  const signup = ui.evaluate("authPageHTML('signup', new URLSearchParams('return=checkout'))");
+  assert.match(signup, /name="return" value="checkout"/);
+  assert.match(signup, /minlength="2" maxlength="120"/);
+  assert.match(signup, /autocomplete="new-password"/);
+  ui.evaluate('S.demoLogin = true');
+  assert.match(ui.evaluate("authPageHTML('login', new URLSearchParams())"), /data-act="demo"/);
+});
+
+test('the owner account is protected in user management and password changes have a real form', () => {
+  const ui = harness();
+  ui.evaluate("ME = {id:'another-admin', name:'مدير', email:'manager@example.com', role:'admin'}; AD.users = [{id:'owner', name:'صاحب المطعم', email:'aliielramal@gmail.com', role:'admin', isOwner:true}]");
+  const users = ui.evaluate('adminUsersHTML()');
+  assert.match(users, /select data-act="user-role"[^>]*disabled/);
+  assert.match(users, /data-act="user-active"[^>]*disabled/);
+  const account = ui.evaluate('viewsAccount()');
+  assert.match(account, /id="passwordForm"/);
+  assert.match(account, /name="currentPassword"/);
+  assert.match(account, /name="confirmPassword"/);
+});
+
+test('retry keys persist for a failed order, survive blocked storage, and allow a new identical order after success', async () => {
+  for (const deniedStorage of [false, true]) {
+    const ui = harness({ deniedStorage });
+    ui.evaluate("ME = {id:'customer', role:'customer'}");
+    const body = { items: [{ id: 'm1', qty: 1 }], customer: { address: 'private delivery address', phone: '01012345678' } };
+    ui.context.body = body;
+    const first = await ui.evaluate('orderRequestKey(body)');
+    const again = await ui.evaluate('orderRequestKey(body)');
+    assert.equal(first, again);
+    assert.match(first, /^[a-zA-Z0-9_-]{8,128}$/);
+    if (!deniedStorage) {
+      assert.ok(!ui.saved.get('bbq_order_request').includes(body.customer.address));
+      assert.ok(!ui.saved.get('bbq_order_request').includes(body.customer.phone));
+    }
+    ui.evaluate("pendingOrderRequest = null; try { localStorage.removeItem('bbq_order_request'); } catch {} ");
+    assert.notEqual(await ui.evaluate('orderRequestKey(body)'), first);
+  }
+});
+
+test('login on the already-open account route re-renders instead of leaving the login form behind', () => {
+  const ui = harness({ hash: '#/account' });
+  ui.evaluate("let redraws = 0; render = () => { redraws++; }; go('account')");
+  assert.equal(ui.evaluate('redraws'), 1);
+});
+
+test('storage errors are visible rather than a fake empty order history', () => {
+  const ui = harness();
+  ui.evaluate("ME = {id:'customer', email:'customer@example.com', role:'customer'}; MY.error = 'قاعدة البيانات غير متاحة'; MY.orders = []");
+  const orders = ui.evaluate('viewsOrders()');
+  assert.match(orders, /قاعدة البيانات غير متاحة/);
+  assert.match(orders, /data-act="refresh-orders"/);
+  assert.doesNotMatch(orders, /مفيش طلبات لسه/);
+});
+
+test('live polling never discards unsaved admin forms or a focused order search', async () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.evaluate(`ME = {id:'owner', role:'admin'}; AD.tab = 'settings'; let refreshes = 0;
+    loadAdminStats = async () => {}; loadAdminOrders = async () => {};
+    api.req = async () => ({notifications:[]}); softRefreshAdmin = () => { refreshes++; };`);
+  await ui.evaluate('refreshLiveState()');
+  assert.equal(ui.evaluate('refreshes'), 0);
+  ui.evaluate("AD.tab = 'orders'");
+  ui.document.activeElement = { closest: () => ({}) };
+  await ui.evaluate('refreshLiveState()');
+  assert.equal(ui.evaluate('refreshes'), 0);
+  ui.document.activeElement = null;
+  await ui.evaluate('refreshLiveState()');
+  assert.equal(ui.evaluate('refreshes'), 1);
+});
+
+test('account forms block duplicate submits and show an API failure without accepting a login', async () => {
+  const ui = harness();
+  const button = { disabled: false, textContent: 'إنشاء الحساب' };
+  const error = { hidden: true, textContent: '' };
+  const form = {
+    dataset: {}, querySelector: (selector) => selector === '[data-form-error]' ? error : button,
+    setAttribute() {}, removeAttribute() {},
+  };
+  ui.context.form = form;
+  let finish;
+  ui.context.work = () => new Promise((resolve) => { finish = resolve; });
+  const running = ui.evaluate('submitAccountForm(form, work)');
+  assert.equal(button.disabled, true);
+  let duplicate = false;
+  ui.context.duplicateWork = () => { duplicate = true; };
+  await ui.evaluate('submitAccountForm(form, duplicateWork)');
+  assert.equal(duplicate, false);
+  finish(); await running;
+  assert.equal(button.disabled, false);
+  ui.context.failedWork = () => { throw new Error('تعذر حفظ الحساب'); };
+  await ui.evaluate('submitAccountForm(form, failedWork)');
+  assert.equal(error.hidden, false); assert.equal(error.textContent, 'تعذر حفظ الحساب');
+  assert.equal(button.textContent, 'إنشاء الحساب'); assert.equal(ui.evaluate('ME'), null);
+});
+
+test('an in-flight history response cannot overwrite the next logged-in customer’s orders', async () => {
+  const ui = harness();
+  let finish;
+  ui.context.delayedRequest = () => new Promise((resolve) => { finish = resolve; });
+  ui.evaluate("ME = {id:'old-customer', role:'customer'}; api.req = delayedRequest");
+  const loading = ui.evaluate('loadMyOrders(true)');
+  ui.evaluate("ME = {id:'new-customer', role:'customer'}; MY.orders = [{id:'new-order'}]");
+  finish({ orders: [{ id: 'old-private-order' }] });
+  await loading;
+  assert.equal(ui.evaluate('MY.orders[0].id'), 'new-order');
 });

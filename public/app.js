@@ -106,15 +106,18 @@ function readStorage(key) { try { return localStorage.getItem(key) || ''; } catc
 const api = {
   token: readStorage(TOKEN_KEY),
   setToken(t) { this.token = t || ''; try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} },
-  async req(path, { method = 'GET', body, raw, signal } = {}) {
+  async req(path, { method = 'GET', body, raw, signal, idempotencyKey } = {}) {
     const headers = {};
     if (this.token) headers.authorization = 'Bearer ' + this.token;
+    if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     let payload;
     if (raw) payload = raw;
     else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
-    const res = await fetch(path, { method, headers, body: payload, signal });
+    let res;
+    try { res = await fetch(path, { method, headers, body: payload, signal, cache: 'no-store' }); }
+    catch (err) { if (err.name === 'AbortError') throw err; throw new Error('الاتصال بالمطعم انقطع — جرّب تاني. إعادة المحاولة لن تكرر نفس الطلب.'); }
     let data = {};
-    try { data = await res.json(); } catch {}
+    try { data = await res.json(); } catch { throw new Error('تعذر الحصول على رد صحيح من المطعم — جرّب لاحقًا'); }
     if (!res.ok) { const e = new Error(data.error || ('خطأ ' + res.status)); e.status = res.status; throw e; }
     return data;
   },
@@ -139,6 +142,7 @@ async function loadBootstrap() {
   try {
     const d = await api.req('/api/bootstrap', { signal: controller.signal });
     S = d.settings; CATS = d.categories; MENU = d.menu; ME = d.user;
+    if (!ME && api.token) api.setToken('');
   } finally { clearTimeout(timeout); }
 }
 
@@ -183,7 +187,10 @@ function parseHash() {
   const seg = pathPart.split('/').filter(Boolean);
   return { name: seg[0] || 'home', sub: seg[1] || null, param: seg[1] || null, q: new URLSearchParams(queryPart || '') };
 }
-const go = (p) => { location.hash = '#/' + String(p).replace(/^#?\/?/, ''); };
+const go = (p) => {
+  const target = '#/' + String(p).replace(/^#?\/?/, '');
+  if (location.hash === target) softRender(); else location.hash = target;
+};
 
 const NAV = [
   { to: 'home', icon: 'home', label: 'الرئيسية' },
@@ -684,12 +691,17 @@ function viewsCheckout() {
 }
 
 /* ============================== ١١) طلباتي والتتبع ============================== */
-const MY = { orders: [], loaded: false };
+const MY = { orders: [], loaded: false, error: '' };
 
 async function loadMyOrders(force) {
   if (!ME) { MY.orders = []; MY.loaded = true; return; }
   if (MY.loaded && !force) return;
-  try { MY.orders = (await api.req('/api/orders/mine')).orders; MY.loaded = true; } catch { MY.orders = []; }
+  const userId = ME.id;
+  try {
+    const data = await api.req('/api/orders/mine');
+    if (ME?.id !== userId) return;
+    MY.orders = data.orders; MY.loaded = true; MY.error = '';
+  } catch (err) { if (ME?.id === userId) MY.error = err.message; }
 }
 
 function viewsOrders() {
@@ -706,7 +718,8 @@ function viewsOrders() {
   return `
   ${headerHTML('my-orders')}<main class="app"><div class="wrap">
     <div class="page-head"><h1>طلباتي</h1><p>${list.length} طلب مرتبط بحسابك (${h(ME.email)})</p></div>
-    ${!list.length ? `<div class="empty"><div class="big">🧾</div><h3>مفيش طلبات لسه</h3>
+    ${MY.error ? `<div class="box" role="alert"><p>${h(MY.error)}</p><button class="btn btn-sm btn-ghost" data-act="refresh-orders">إعادة المحاولة</button></div>` : ''}
+    ${!list.length && !MY.error ? `<div class="empty"><div class="big">🧾</div><h3>مفيش طلبات لسه</h3>
       <a class="btn btn-primary" style="margin-top:14px" href="#/orders">ابدأ طلبك</a></div>` : `
     <div class="list" style="margin-top:14px">
       ${list.map((o) => `
@@ -820,15 +833,16 @@ function authPageHTML(kind, q) {
   return `
   ${headerHTML('account')}<main class="app"><div class="wrap" style="max-width:460px">
     <div class="page-head"><h1>${isLogin ? 'تسجيل الدخول' : isReset ? 'كلمة سر جديدة' : 'إنشاء حساب'}</h1>
-      <p>${isLogin ? 'ادخل على حسابك عشان تتابع طلباتك' : isReset ? 'اكتب كلمة السر الجديدة' : 'حساب جديد بيتعمل في ثوانٍ'}</p></div>
+      <p>${isLogin ? 'ادخل على حسابك عشان تتابع طلباتك' : isReset ? 'اكتب كلمة السر الجديدة' : 'حسابك وطلباتك محفوظين عند المطعم، وتقدر تدخل من أي جهاز'}</p></div>
     <form id="${isLogin ? 'loginForm' : isReset ? 'resetForm' : 'signupForm'}" class="box" style="margin-top:14px">
       ${back}${isReset ? `<input type="hidden" name="token" value="${h(token)}">` : ''}
       ${isLogin || isReset ? '' : `
-        <div style="margin-bottom:10px"><label class="lbl">الاسم</label><input name="name" required placeholder="اسمك"></div>
-        <div style="margin-bottom:10px"><label class="lbl">رقم الهاتف</label><input name="phone" inputmode="tel" placeholder="01xxxxxxxxx"></div>`}
-      ${isReset ? '' : `<div style="margin-bottom:10px"><label class="lbl">الإيميل</label><input name="email" type="email" required placeholder="you@example.com"></div>`}
-      <div style="margin-bottom:14px"><label class="lbl">كلمة السر${isLogin ? '' : ' (٦ أحرف على الأقل)'}</label>
-        <input name="password" type="password" required minlength="6" placeholder="••••••"></div>
+        <div style="margin-bottom:10px"><label class="lbl" for="signupName">الاسم</label><input id="signupName" name="name" autocomplete="name" required minlength="2" maxlength="120" placeholder="اسمك"></div>
+        <div style="margin-bottom:10px"><label class="lbl" for="signupPhone">رقم الهاتف</label><input id="signupPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="01xxxxxxxxx"></div>`}
+      ${isReset ? '' : `<div style="margin-bottom:10px"><label class="lbl" for="authEmail">الإيميل</label><input id="authEmail" name="email" type="email" autocomplete="email" dir="ltr" required maxlength="254" placeholder="you@example.com"></div>`}
+      <div style="margin-bottom:14px"><label class="lbl" for="authPassword">كلمة السر${isLogin ? '' : ' (٦ أحرف على الأقل)'}</label>
+        <input id="authPassword" name="password" type="password" autocomplete="${isLogin ? 'current-password' : 'new-password'}" required minlength="6" maxlength="128" placeholder="••••••"></div>
+      <p class="form-error small" data-form-error role="alert" hidden></p>
       <button class="btn btn-primary btn-block" type="submit">${isLogin ? 'دخول' : isReset ? 'حفظ كلمة السر' : 'إنشاء الحساب'}</button>
       <div class="center small muted" style="margin-top:12px">
         ${isLogin
@@ -837,9 +851,8 @@ function authPageHTML(kind, q) {
           : isReset ? `<a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a>`
           : `عندك حساب؟ <a href="#/login${ret ? '?return=' + h(ret) : ''}" style="color:var(--link)">سجّل الدخول</a>`}
       </div>
-      ${isLogin ? `<div class="center" style="margin-top:14px">
+      ${isLogin && S.demoLogin === true ? `<div class="center" style="margin-top:14px">
         <button type="button" class="btn btn-sm btn-ghost" data-act="demo">دخول سريع بحساب تجريبي (عميل)</button>
-        <div class="small muted" style="margin-top:8px">للتجربة: admin@bbq.app/admin123 (أدمن) · supervisor@bbq.app/super123 (مشرف) · demo@bbq.app/demo123 (عميل)</div>
       </div>` : ''}
     </form>
   </div>${footerHTML()}</main>`;
@@ -879,6 +892,15 @@ function viewsAccount() {
       </label>` : ''}
       <button class="btn btn-primary btn-block" style="margin-top:10px" type="submit">حفظ البيانات</button>
     </form>
+    <form id="passwordForm" class="box" style="margin-top:12px">
+      <strong>تغيير كلمة السر</strong>
+      <p class="small muted">بعد الحفظ، الجلسات المفتوحة على الأجهزة التانية هتتقفل.</p>
+      <div><label class="lbl" for="currentPassword">كلمة السر الحالية</label><input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required maxlength="128"></div>
+      <div style="margin-top:10px"><label class="lbl" for="newPassword">كلمة السر الجديدة</label><input id="newPassword" name="password" type="password" autocomplete="new-password" required minlength="6" maxlength="128"></div>
+      <div style="margin-top:10px"><label class="lbl" for="confirmPassword">تأكيد كلمة السر</label><input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required minlength="6" maxlength="128"></div>
+      <p class="form-error small" data-form-error role="alert" hidden></p>
+      <button class="btn btn-primary btn-block" style="margin-top:10px" type="submit">حفظ كلمة السر</button>
+    </form>
     <div class="btn-row" style="margin-top:12px">
       <a class="btn btn-ghost" href="#/my-orders">🧾 طلباتي</a>
       ${staff ? `<a class="btn btn-ghost" href="#/admin">🧑‍🍳 لوحة الإدارة</a>` : ''}
@@ -911,9 +933,15 @@ async function loadAdminOrders() {
   if (AD.payment && AD.payment !== 'all') p.set('payment', AD.payment);
   if (AD.q) p.set('q', AD.q);
   if (AD.range === 'today') p.set('from', new Date().toDateString());
-  AD.orders = (await api.req('/api/admin/orders?' + p.toString())).orders;
+  const userId = ME?.id;
+  const data = await api.req('/api/admin/orders?' + p.toString());
+  if (ME?.id === userId && isStaff()) AD.orders = data.orders;
 }
-async function loadAdminStats() { AD.stats = await api.req('/api/admin/stats'); }
+async function loadAdminStats() {
+  const userId = ME?.id;
+  const data = await api.req('/api/admin/stats');
+  if (ME?.id === userId && isStaff()) AD.stats = data;
+}
 
 function viewsAdmin(q) {
   if (!ME) {
@@ -1138,17 +1166,18 @@ function adminUsersHTML() {
             <strong>${h(x.name || 'بدون اسم')}</strong>
             <span class="role-chip role-${h(x.role)}">${x.role === 'admin' ? 'أدمن' : x.role === 'supervisor' ? 'مشرف' : 'عميل'}</span>
             ${x.active === false ? `<span class="role-chip off-chip">معطّل</span>` : ''}
+            ${x.isOwner ? `<span class="role-chip">صاحب المطعم</span>` : ''}
             ${x.id === ME.id ? `<span class="role-chip">إنت</span>` : ''}
           </div>
           <div class="small muted" style="margin-top:3px">${h(x.email)} · 🧾 ${x.orders} طلب${x.phone ? ' · 📱 ' + h(x.phone) : ''}</div>
         </div>
         <div class="btn-row" style="justify-content:flex-end">
-          <select data-act="user-role" data-id="${h(x.id)}" style="width:auto;padding:8px 10px;font-size:12.5px" ${x.id === ME.id ? 'disabled' : ''}>
+          <select data-act="user-role" data-id="${h(x.id)}" style="width:auto;padding:8px 10px;font-size:12.5px" ${x.id === ME.id || x.isOwner ? 'disabled' : ''}>
             <option value="customer" ${x.role === 'customer' ? 'selected' : ''}>عميل</option>
             <option value="supervisor" ${x.role === 'supervisor' ? 'selected' : ''}>مشرف</option>
             <option value="admin" ${x.role === 'admin' ? 'selected' : ''}>أدمن</option>
           </select>
-          <button class="btn btn-sm ${x.active === false ? 'btn-ok' : 'btn-danger'}" data-act="user-active" data-id="${h(x.id)}" data-v="${x.active === false ? '1' : '0'}" ${x.id === ME.id ? 'disabled' : ''}>
+          <button class="btn btn-sm ${x.active === false ? 'btn-ok' : 'btn-danger'}" data-act="user-active" data-id="${h(x.id)}" data-v="${x.active === false ? '1' : '0'}" ${x.id === ME.id || x.isOwner ? 'disabled' : ''}>
             ${x.active === false ? 'تفعيل' : 'تعطيل'}</button>
         </div>
       </div>`).join('')}
@@ -1379,8 +1408,9 @@ function adminSettingsHTML() {
     </div>
   </form>
   <div class="box" style="margin-top:12px">
-    <strong>حسابات الدخول</strong>
-    <p class="small muted" style="margin:6px 0 0">admin@bbq.app · supervisor@bbq.app · demo@bbq.app — غيّر كلمات السر من صفحة المستخدمين أو أنشئ حسابات جديدة من التطبيق.</p>
+    <strong>التسجيل واستقبال الطلبات</strong>
+    <p class="small muted" style="margin:6px 0 0">الحسابات والطلبات محفوظة على ${S.storage === 'redis' ? 'قاعدة Upstash Redis المشتركة' : 'قرص السيرفر (يلزم قرص دائم على الاستضافة)'}. أي عميل جديد يسجل كعميل فقط. الطلب يظهر هنا بإشعار بعد حفظه، وكلمة السر لا تُعرض لأي مستخدم.</p>
+    <p class="small muted" style="margin:6px 0 0">${S.realtime === false ? 'تحديث تلقائي كل ٥ ثوانٍ أثناء فتح التطبيق.' : 'إشعارات لحظية مع تحديث دوري احتياطي.'} الدفع الحقيقي متاح عند التوصيل، أو بعد إعداد Stripe / Paymob.</p>
   </div>`;
 }
 
@@ -1401,7 +1431,7 @@ function adminSystemHTML() {
     <div class="kpi ${persistent ? 'hl' : ''}"><b>${persistent ? '✔' : '✖'}</b><span>تخزين ${r.storage === 'redis' ? 'Upstash (دائم)' : 'مؤقت'}</span></div>
     <div class="kpi"><b>${r.serverless ? 'سيرفرلس' : 'سيرفر'}</b><span>طريقة التشغيل${r.serverless ? ' (Vercel)' : ''}</span></div>
     <div class="kpi ${ping.ok ? 'hl' : ''}"><b>${ping.ok ? ping.ms + 'ms' : ping.skipped ? '—' : '✖'}</b><span>زمن الرد من Upstash</span></div>
-    <div class="kpi ${r.credentials.adminFromEnv ? 'hl' : ''}"><b>${r.credentials.adminFromEnv ? '✔' : '⚠'}</b><span>كلمة سر الأدمن من البيئة</span></div>
+    <div class="kpi ${r.credentials.ownerFromEnv && r.credentials.ownerConfigured ? 'hl' : ''}"><b>${r.credentials.ownerFromEnv && r.credentials.ownerConfigured ? '✔' : '⚠'}</b><span>حساب صاحب المطعم من البيئة</span></div>
   </div>
 
   ${(r.warnings || []).map((w) => note(w.message, w.level)).join('')}
@@ -1436,10 +1466,13 @@ function adminSystemHTML() {
   <div class="box" style="margin-top:12px">
     <strong>بيانات الدخول</strong>
     <div class="line" style="border-top:1px solid var(--border);margin-top:8px">
-      <span>حساب الأدمن</span><span class="small">${h(r.credentials.adminEmail)}</span>
+      <span>حساب صاحب المطعم</span><span class="small">${h(r.credentials.ownerEmail)}</span>
     </div>
     <div class="line" style="border-top:1px solid var(--border)">
-      <span>كلمة السر</span><span class="small">${r.credentials.adminFromEnv ? 'من ADMIN_PASSWORD (بيئة)' : 'الافتراضية — غيّرها فورًا'}</span>
+      <span>كلمة السر</span><span class="small">${r.credentials.ownerFromEnv ? 'من ADMIN_PASSWORD (البيئة)' : '⚠ مش متظبطة في البيئة'}</span>
+    </div>
+    <div class="line" style="border-top:1px solid var(--border)">
+      <span>الحساب متجهّز؟</span><span class="small">${r.credentials.ownerConfigured ? '✔ نعم' : '✖ لسه'}</span>
     </div>
     <p class="small muted" style="margin:8px 0 0">${h(r.credentials.note)}</p>
   </div>
@@ -1448,7 +1481,7 @@ function adminSystemHTML() {
     <strong>إزاي تظبطهم على Vercel؟</strong>
     <ol class="small" style="margin:8px 0 0;padding-inline-start:20px;line-height:1.9">
       <li>console.upstash.com → Create Database (Free) → انسخ <b>UPSTASH_REDIS_REST_URL</b> و <b>UPSTASH_REDIS_REST_TOKEN</b> من قسم REST API.</li>
-      <li>Vercel → المشروع → <b>Settings → Environment Variables</b> → ضيف: المتغيرين دول + <b>APP_URL</b> + <b>ADMIN_PASSWORD</b> (+ <code>DEMO_LOGIN=0</code>).</li>
+      <li>Vercel → المشروع → <b>Settings → Environment Variables</b> → ضيف: المتغيرين دول + <b>APP_URL</b> + <b>ADMIN_PASSWORD</b> (+ <code>ADMIN_EMAIL</code> لو عايز إيميل تاني).</li>
       <li><b>Deployments → ⋯ → Redeploy</b> — من غير redeploy المتغيرات مش بتتطبّق.</li>
       <li>رجّع هنا واضغط «تحديث» — لازم تشوف ✔ جنب كل متغير إجباري.</li>
     </ol>
@@ -1561,11 +1594,16 @@ function renderNotifPanel() {
         </button>`).join('')}
     <div style="padding:10px 14px" class="small muted">الإشعارات بتوصل للمشرفين والأدمن بس عند أي طلب جديد.</div>`;
 }
-async function loadNotifs() {
+async function loadNotifs({ announce = false } = {}) {
   if (!isStaff()) return;
+  const userId = ME.id;
   try {
     const d = await api.req('/api/notifications');
+    if (!ME || ME.id !== userId) return;
+    const known = new Set(NOTIFS.map((n) => n.id));
+    const fresh = d.notifications.filter((n) => !known.has(n.id) && !n.read && !n.silent);
     NOTIFS = d.notifications;
+    if (announce && fresh.length) toast(`🔔 ${fresh[0].title} — ${fresh[0].body}`, 5000);
     const btn = $('#notifBtn');
     if (btn) { const unread = NOTIFS.filter((n) => !n.read).length; btn.innerHTML = `${icon('bell')}${unread ? `<span class="badge-n red">${formatAmount(unread)}</span>` : ''}`; }
     if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
@@ -1579,69 +1617,77 @@ function toggleNotifPanel() {
   if (!panel.classList.contains('hidden')) loadNotifs();
 }
 
-/* ============================== ١٦) البث المباشر (SSE) ============================== */
+/* ============================== ١٦) تحديث الطلبات والإشعارات ============================== */
 let es = null;
+let pollTimer = null;
+let pollInterval = 0;
+let refreshingLive = false;
+let sseFailures = 0;
+
+async function refreshLiveState() {
+  if (!ME || refreshingLive) return;
+  refreshingLive = true;
+  const userId = ME.id;
+  try {
+    const r = parseHash();
+    if (isStaff()) await loadNotifs({ announce: true });
+    if (['my-orders', 'order'].includes(r.name)) {
+      const before = JSON.stringify(MY.orders);
+      const oldError = MY.error;
+      await loadMyOrders(true);
+      if (ME?.id === userId && (before !== JSON.stringify(MY.orders) || oldError !== MY.error)) softRender();
+    }
+    if (r.name === 'admin' && isStaff()) {
+      await Promise.all([loadAdminStats(), loadAdminOrders()]);
+      if (AD.tab === 'customers') AD.customers = (await api.req('/api/admin/customers')).customers;
+      if (AD.tab === 'users' && isAdmin()) AD.users = (await api.req('/api/admin/users')).users;
+      /* Never discard an unsaved settings/payment/menu form or an active search. */
+      const typing = document.activeElement?.closest?.('#adminBody input, #adminBody textarea, #adminBody select');
+      if (ME?.id === userId && ['dash', 'orders', 'customers', 'users'].includes(AD.tab) && !typing) softRefreshAdmin();
+    }
+  } catch { /* Leave the last known data visible and retry; never invent a successful update. */ }
+  finally { refreshingLive = false; }
+}
+
 function connectSSE() {
   if (es) { es.close(); es = null; }
-  if (!ME || !api.token) return;
+  if (!ME || !api.token || S.realtime === false) return;
   try {
     es = new EventSource(`/api/events?token=${encodeURIComponent(api.token)}`);
     es.onmessage = async (ev) => {
-      let d = {}; try { d = JSON.parse(ev.data); } catch { return; }
-      if (d.kind === 'hello') return;
+      let d; try { d = JSON.parse(ev.data); } catch { return; }
+      if (!ME || d.kind === 'hello') return;
       if (d.kind === 'notification' && isStaff()) {
-        const fresh = (d.items || []).filter((n) => String(n.userId) === String(ME.id));
-        if (fresh.length) {
-          NOTIFS = [...fresh, ...NOTIFS];
-          const n0 = fresh[0];
-          toast(`🔔 ${n0.title} — ${n0.body}`, 5000);
-          const btn = $('#notifBtn'); if (btn) btn.innerHTML = `🔔<span class="badge-n red">${NOTIFS.filter((x) => !x.read).length}</span>`;
-          if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
-          /* تحديث فوري للوحة */
-          if (parseHash().name === 'admin') { await loadAdminStats(); await loadAdminOrders(); softRefreshAdmin(); }
-        }
+        const fresh = (d.items || []).filter((n) => n.userId === ME.id && !NOTIFS.some((known) => known.id === n.id));
+        NOTIFS = [...fresh, ...NOTIFS];
+        const loud = fresh.find((n) => !n.silent);
+        if (loud) toast(`🔔 ${loud.title} — ${loud.body}`, 5000);
       }
-      if (d.kind === 'order:mine') {
-        MY.loaded = false;
-        await loadMyOrders(true);
-        const r = parseHash();
-        if (r.name === 'my-orders') softRender();
-        if (r.name === 'order' && r.param === d.orderId) softRender();
-        if (MY.orders.some((o) => o.id === d.orderId) && ['my-orders', 'order'].includes(r.name)) toast('تم تحديث حالة طلبك ✅');
-      }
+      if (d.kind === 'order:mine') MY.loaded = false;
+      await refreshLiveState();
     };
     es.onerror = () => {
       sseFailures += 1;
-      if (sseFailures >= 3) { es.close(); es = null; startPolling(20000); }   // بدّل للتحديث الدوري
+      if (sseFailures >= 3) { es?.close(); es = null; startPolling(5000); }
     };
-    es.onopen = () => { sseFailures = 0; };
-  } catch { /* مش مدعوم */ }
+    es.onopen = () => { sseFailures = 0; refreshLiveState(); };
+  } catch { startPolling(5000); }
 }
 
-/* ============================== ١٦.٥) التحديث الدوري (بديل SSE على Vercel) ============================== */
-let pollTimer = null;
-let sseFailures = 0;
-
-/**
- * على الاستضافة السيرفرلس (Vercel) مفيش SSE — فبنستخدم تحديث دوري كل ٢٠ ثانية.
- * نفس النتيجة: العميل يشوف تغيّر حالة طلبه والإدارة تشوف الطلبات الجديدة.
- */
-function startPolling(ms = 20000) {
-  if (pollTimer) return;
-  pollTimer = setInterval(async () => {
-    try {
-      const r = parseHash();
-      if (isStaff()) await loadNotifs();
-      if (['my-orders', 'order'].includes(r.name) && ME) {
-        const before = MY.orders.map((o) => o.id + ':' + o.status).join('|');
-        await loadMyOrders(true);
-        const after = MY.orders.map((o) => o.id + ':' + o.status).join('|');
-        if (before !== after && before) { toast('تم تحديث حالة طلبك ✅'); softRender(); }
-      }
-      if (r.name === 'admin' && isStaff()) { await loadAdminStats(); await loadAdminOrders(); softRefreshAdmin(); }
-    } catch { /* نتجاهل ونحاول تاني */ }
-  }, ms);
+/* Poll shared storage on Vercel; also catch SSE disconnects/multi-worker updates. */
+function startPolling(ms = 5000) {
+  if (pollTimer && pollInterval === ms) return;
+  if (pollTimer) clearInterval(pollTimer);
+  pollInterval = ms;
+  pollTimer = setInterval(refreshLiveState, ms);
 }
+function startRealtime() {
+  startPolling(S.realtime === false ? 5000 : 15000);
+  connectSSE();
+}
+window.addEventListener('online', refreshLiveState);
+window.addEventListener('focus', refreshLiveState);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshLiveState(); });
 
 /* ============================== ١٧) الرسم والأحداث ============================== */
 function softRender() { render({ soft: true }); }
@@ -1774,28 +1820,36 @@ function bindPage(r) {
   if (lf) lf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(lf);
-    try {
+    await submitAccountForm(lf, async () => {
       const d = await api.req('/api/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
-      api.setToken(d.token); ME = d.user; MY.loaded = false;
+      acceptLogin(d);
       toast(`أهلًا ${ME.name || ME.email} 👋`);
-      if (S.realtime === false) startPolling(20000); else connectSSE();
-      await loadNotifs();
-      go(fd.get('return') || 'account');
-    } catch (err) { toast(err.message, 3500); }
+      await loadNotifs(); startRealtime();
+      go(fd.get('return') || (isStaff() ? 'admin' : 'account'));
+    });
   });
 
   const sf = $('#signupForm');
   if (sf) sf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(sf);
-    try {
+    await submitAccountForm(sf, async () => {
       const d = await api.req('/api/auth/signup', { method: 'POST', body: { name: fd.get('name'), email: fd.get('email'), password: fd.get('password'), phone: fd.get('phone') } });
-      api.setToken(d.token); ME = d.user; MY.loaded = false;
-      toast('تم إنشاء حسابك 🎉');
-      if (S.realtime === false) startPolling(20000); else connectSSE();
-      await loadNotifs();
-      go(fd.get('return') || 'account');
-    } catch (err) { toast(err.message, 3500); }
+      acceptLogin(d); toast('تم إنشاء حسابك وحفظه عند المطعم 🎉');
+      startRealtime(); go(fd.get('return') || 'account');
+    });
+  });
+
+  const pwf = $('#passwordForm');
+  if (pwf) pwf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(pwf);
+    await submitAccountForm(pwf, async () => {
+      if (fd.get('password') !== fd.get('confirmPassword')) throw new Error('تأكيد كلمة السر مش مطابق');
+      const d = await api.req('/api/auth/password', { method: 'POST', body: { currentPassword: fd.get('currentPassword'), password: fd.get('password') } });
+      api.setToken(d.token); ME = d.user; pwf.reset();
+      startRealtime(); toast('تم تغيير كلمة السر وإغلاق الجلسات القديمة ✅');
+    });
   });
 
   const ff = $('#forgotForm');
@@ -1805,7 +1859,6 @@ function bindPage(r) {
     try {
       const d = await api.req('/api/auth/forgot', { method: 'POST', body: { email: fd.get('email') } });
       toast(d.message, 5000);
-      toast('(رسالة الاستعادة بتظهر في الـconsole بتاع السيرفر لو مفيش إيميل مضبوط)', 5000);
       go('login');
     } catch (err) { toast(err.message); }
   });
@@ -1971,10 +2024,57 @@ function bindPage(r) {
   });
 }
 
+function acceptLogin(data) {
+  api.setToken(data.token); ME = data.user; NOTIFS = [];
+  MY.loaded = false; MY.orders = []; MY.error = '';
+  AD.orders = []; AD.stats = null; AD.users = []; AD.customers = [];
+  AD.payCfg = null; AD.waCfg = null; AD.editing = null;
+}
+async function submitAccountForm(form, work) {
+  if (form.dataset.busy === '1') return;
+  const btn = $('button[type=submit]', form);
+  const label = btn?.textContent;
+  const error = $('[data-form-error]', form);
+  form.dataset.busy = '1'; form.setAttribute('aria-busy', 'true');
+  if (error) { error.hidden = true; error.textContent = ''; }
+  if (btn) { btn.disabled = true; btn.textContent = 'جاري الحفظ…'; }
+  try { await work(); }
+  catch (err) { if (error) { error.textContent = err.message; error.hidden = false; } toast(err.message, 4000); }
+  finally {
+    form.dataset.busy = ''; form.removeAttribute('aria-busy');
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
+/* Keep an anonymous retry key, not the delivery address, across network failures/reloads. */
+let pendingOrderRequest;
+try { pendingOrderRequest = JSON.parse(readStorage('bbq_order_request')); } catch {}
+async function orderRequestKey(body) {
+  const text = JSON.stringify({ user: ME.id, body });
+  let fingerprint;
+  if (window.crypto?.subtle) {
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    fingerprint = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  } else {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+    fingerprint = String(hash >>> 0);
+  }
+  let request = pendingOrderRequest;
+  if (!request || request.fingerprint !== fingerprint) {
+    request = { fingerprint, key: window.crypto?.randomUUID?.() || 'order_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2) };
+    pendingOrderRequest = request;
+    try { localStorage.setItem('bbq_order_request', JSON.stringify(request)); } catch {}
+  }
+  return request.key;
+}
+
 /* ============================== ١٩) تأكيد الطلب ============================== */
 async function submitOrder(e) {
   e.preventDefault();
   const form = e.target;
+  if (form.dataset.busy === '1') return;
+  form.dataset.busy = '1';
   const fd = new FormData(form);
   const customer = {
     name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'),
@@ -1988,22 +2088,26 @@ async function submitOrder(e) {
   const btn = $('button[type=submit]', form);
   if (btn) { btn.disabled = true; btn.textContent = 'بنسجّل طلبك…'; }
   try {
-    const d = await api.req('/api/orders', { method: 'POST', body });
+    const idempotencyKey = await orderRequestKey(body);
+    const d = await api.req('/api/orders', { method: 'POST', body, idempotencyKey });
+    pendingOrderRequest = null;
+    try { localStorage.removeItem('bbq_order_request'); } catch {}
     cart = []; promoCode = ''; saveCart();
+    MY.orders = [d.order, ...MY.orders.filter((o) => o.id !== d.order.id)];
     MY.loaded = false;
     await loadMyOrders();
     /* لو الدفع أونلاين: نودّيه على صفحة الدفع فورًا (رابط جاي من السيرفر) */
     if (d.payment && d.payment.url) {
-      toast(`تم استلام طلبك ${d.order.id} — هتتوجّه للدفع 💳`, 3000);
+      toast(`تم إرسال طلبك للإدارة ${d.order.id} — هتتوجّه للدفع 💳`, 3000);
       setTimeout(() => { location.href = d.payment.url; }, 600);
       return;
     }
-    toast(`تم استلام طلبك ${d.order.id} 🔥`, 4000);
+    toast(`تم إرسال طلبك للإدارة ${d.order.id} 🔥`, 4000);
     go('order/' + d.order.id);
   } catch (err) {
     toast(err.message, 4000);
     if (btn) { btn.disabled = false; btn.textContent = 'تأكيد الطلب 🍖'; }
-  }
+  } finally { form.dataset.busy = ''; }
 }
 
 /* ============================== ٢٠) كل الضغطات ============================== */
@@ -2068,7 +2172,8 @@ document.addEventListener('click', async (e) => {
     }
     case 'logout':
       try { await api.req('/api/auth/logout', { method: 'POST' }); } catch {}
-      api.setToken(''); ME = null; NOTIFS = []; MY.orders = []; MY.loaded = false;
+      api.setToken(''); ME = null; NOTIFS = []; MY.orders = []; MY.loaded = false; MY.error = '';
+      AD.orders = []; AD.users = []; AD.customers = []; AD.stats = null; AD.payCfg = null; AD.waCfg = null;
       if (es) { es.close(); es = null; }
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       toast('تم تسجيل الخروج'); go('home');
@@ -2076,8 +2181,7 @@ document.addEventListener('click', async (e) => {
     case 'demo':
       try {
         const d = await api.req('/api/auth/demo', { method: 'POST' });
-        api.setToken(d.token); ME = d.user; MY.loaded = false;
-        if (S.realtime === false) startPolling(20000); else connectSSE();
+        acceptLogin(d); startRealtime();
         await loadNotifs();
         toast(`أهلًا ${ME.name} 👋`); go('account');
       } catch (err) { toast(err.message); }
@@ -2092,6 +2196,7 @@ document.addEventListener('click', async (e) => {
       break;
     }
 
+    case 'refresh-orders': await loadMyOrders(true); softRender(); break;
     case 'cancelOrder':
       if (confirm('متأكد إنك عايز تلغي الطلب؟')) {
         try { await api.req('/api/orders/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }); await loadMyOrders(true); toast('تم إلغاء الطلب'); softRender(); }
@@ -2343,7 +2448,7 @@ function finishSplash() {
   } catch (e) {
     $('#view').innerHTML = `${headerHTML('home')}<main class="app"><div class="wrap empty" style="padding-top:60px">
       <div class="big">🔌</div><h1>مش قادرين نوصل للمطعم</h1>
-      <p>تأكد من اتصالك بالإنترنت ومن تشغيل السيرفر، وجرّب تاني.</p>
+      <p>${h(e.message || 'تأكد من اتصالك بالإنترنت ومن تشغيل السيرفر، وجرّب تاني.')}</p>
       <button class="btn btn-primary" onclick="location.reload()">إعادة المحاولة</button>
     </div></main>`;
     return;
@@ -2352,7 +2457,6 @@ function finishSplash() {
   }
   if (ME) {
     await loadNotifs();
-    if (S.realtime === false) startPolling(20000);
-    else { connectSSE(); setInterval(() => { if (isStaff()) loadNotifs(); }, 30000); }
+    startRealtime();
   }
 })();

@@ -10,8 +10,9 @@ const { ensureReady, serverlessHandler } = require('./index');
 const MODE = process.argv[2] || 'first';
 const PORT = Number(process.env.PORT || 3199);
 const BASE = 'http://127.0.0.1:' + PORT;
-/* لو ADMIN_PASSWORD مظبوط في البيئة، السيرفر بيخلّي كلمة سر الأدمن هي دي */
-const ADMIN_PW = String(process.env.ADMIN_PASSWORD || '').trim() || 'admin123';
+/* حساب صاحب المطعم بيتجهّز من ADMIN_EMAIL + ADMIN_PASSWORD (زي ما هيبقى على Vercel) */
+const OWNER_EMAIL = String(process.env.ADMIN_EMAIL || '').trim();
+const OWNER_PW = String(process.env.ADMIN_PASSWORD || '').trim();
 
 const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
   const h = { ...headers };
@@ -28,28 +29,31 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
   const server = http.createServer(serverlessHandler);
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
 
-  const admin = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).d;
+  const admin = (await J('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } })).d;
   const out = {};
 
   if (MODE === 'env-report') {
     /* تقرير متغيرات البيئة + اتصال Upstash (زي tools/check-env.js بس جوه وضع Vercel) */
-    const rep = await require('./env').report({ ping: true });
+    const rep = await require('./deploy-env').report({ ping: true });
     out.storage = rep.storage;
-    out.adminFromEnv = rep.credentials.adminFromEnv;
+    out.ownerFromEnv = rep.credentials.ownerFromEnv;
+    out.ownerConfigured = rep.credentials.ownerConfigured;
     out.appUrl = rep.appUrl;
     out.ping = !!(rep.redis && rep.redis.ok);
     out.pingError = (rep.redis && rep.redis.error) || '';
-    out.loginWithEnvPassword = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).status;
-    out.loginWithDefault = ADMIN_PW === 'admin123' ? 401
-      : (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).status;
+    /* الدخول بيكون بإيميل/كلمة سر صاحب المطعم من البيئة — ومش بـ admin123 */
+    out.loginWithEnvPassword = (await J('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } })).status;
+    out.loginWithDefault = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: 'admin123' } })).status;
     const h = await J('GET', '/api/health');
     out.persistent = h.d.persistent;
+    out.ownerFromEnvHealth = h.d.ownerFromEnv;
   } else if (MODE === 'first') {
     const boot = await J('GET', '/api/bootstrap');
     out.storage = boot.d.settings.storage;
     out.realtime = boot.d.settings.realtime;
     out.menu = boot.d.menu.length;
 
+    await J('PATCH', '/api/admin/whatsapp', { token: admin.token, body: { enabled: true, provider: 'console' } });
     const cu = (await J('POST', '/api/auth/signup', { body: { name: 'عميل فيرسل', email: 'v@bbq.app', password: 'v123456', phone: '01011122233' } })).d;
     const ord = await J('POST', '/api/orders', {
       token: cu.token,
@@ -76,7 +80,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
     out.imgStatus = img.status;
     out.imgBytes = (await img.arrayBuffer()).byteLength;
   } else {
-    out.login = (await J('POST', '/api/auth/login', { body: { email: 'admin@bbq.app', password: ADMIN_PW } })).status;
+    out.login = (await J('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } })).status;
     const ords = await J('GET', '/api/admin/orders', { token: admin.token });
     out.orders = ords.d.orders.length;
     out.orderId = ords.d.orders[0] && ords.d.orders[0].id;

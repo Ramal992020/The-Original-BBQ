@@ -13,37 +13,16 @@
    الرمز (exit code): 0 = كل حاجة تمام · 1 = فيه حاجة ناقصة أو غلط.
    ========================================================================== */
 'use strict';
-const fs = require('fs');
-const path = require('path');
-
-/* ------------------ تحميل .env (بدون أي مكتبة خارجية) ------------------ */
-function loadDotEnv() {
-  const file = path.join(__dirname, '..', '.env');
-  if (!fs.existsSync(file)) return false;
-  let n = 0;
-  for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const i = line.indexOf('=');
-    if (i < 0) continue;
-    const key = line.slice(0, i).trim();
-    let val = line.slice(i + 1).trim().replace(/^['"]|['"]$/g, '');
-    if (!key || process.env[key] !== undefined) continue;   // البيئة ليها الأولوية
-    process.env[key] = val;
-    n++;
-  }
-  return n > 0;
-}
-
-const dotenvLoaded = loadDotEnv();
 
 /* --vercel = «اختبرني كأني على Vercel»: يفعّل نفس شروط السيرفرلس
    (مفيش قرص → لازم Upstash، ولازم APP_URL و ADMIN_PASSWORD) */
 const simulateVercel = process.argv.includes('--vercel');
 if (simulateVercel && !process.env.VERCEL) process.env.VERCEL = '1';
 
+/* تحميل .env المحلي لازم يحصل قبل ما المتجر يقرا متغيرات البيئة */
+require('../server/env').load();
 const store = require('../server/store');
-const env = require('../server/env');
+const deployEnv = require('../server/deploy-env');
 
 const C = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
@@ -51,13 +30,14 @@ const C = {
 };
 const col = (c, s) => (process.stdout.isTTY ? `${c}${s}${C.reset}` : s);
 const ICON = { ok: '✅', missing: '❌', invalid: '⚠️ ', optional: '⚪' };
+const iconFor = (v) => (v.status === 'missing' && v.level !== 'required' ? '⚠️ ' : ICON[v.status] || '⚪');
 
 (async () => {
   const ping = !process.argv.includes('--no-ping');
   const asJson = process.argv.includes('--json');
 
   await store.init();
-  const rep = await env.report({ ping });
+  const rep = await deployEnv.report({ ping });
 
   if (asJson) {
     console.log(JSON.stringify(rep, null, 2));
@@ -67,7 +47,6 @@ const ICON = { ok: '✅', missing: '❌', invalid: '⚠️ ', optional: '⚪' };
   const line = '─'.repeat(64);
   console.log('');
   console.log(col(C.bold, '🔥 The Original BBQ — فحص جاهزية النشر'));
-  if (dotenvLoaded) console.log(col(C.dim, '   (اتقرأ ملف .env من جذر المشروع)'));
   console.log(line);
   console.log(`   الوضع        : ${rep.serverless ? (simulateVercel ? 'سيرفرلس (محاكاة Vercel)' : 'سيرفرلس (Vercel)') : 'سيرفر عادي (محلي)'}`);
   console.log(`   التخزين      : ${rep.storage === 'redis'
@@ -79,7 +58,7 @@ const ICON = { ok: '✅', missing: '❌', invalid: '⚠️ ', optional: '⚪' };
   console.log('');
   console.log(col(C.bold, 'المتغيرات:'));
   for (const v of rep.vars) {
-    const icon = ICON[v.status] || '⚪';
+    const icon = iconFor(v);
     const name = v.key.padEnd(26);
     if (v.status === 'missing') {
       console.log(`   ${icon} ${name} ${col(C.red, v.active && v.level === 'required' ? 'ناقص (إجباري)' : 'مش مظبوط')}`);
@@ -103,10 +82,14 @@ const ICON = { ok: '✅', missing: '❌', invalid: '⚠️ ', optional: '⚪' };
   }
 
   console.log('');
-  console.log(col(C.bold, 'بيانات الدخول:'));
-  console.log(`   الأدمن من البيئة: ${rep.credentials.adminFromEnv
-    ? col(C.green, `نعم (${rep.credentials.adminEmail} ← ADMIN_PASSWORD)`)
-    : col(C.yellow, 'لا — الحساب بكلمة السر الافتراضية')}`);
+  console.log(col(C.bold, 'حساب صاحب المطعم:'));
+  console.log(`   من البيئة : ${rep.credentials.ownerFromEnv
+    ? col(C.green, 'نعم (ADMIN_PASSWORD / ADMIN_PASSWORD_HASH)')
+    : col(C.red, 'لا — الحساب مش هيتجهّز أصلًا')}`);
+  console.log(`   الإيميل   : ${rep.credentials.ownerEmail}`);
+  console.log(`   متجهّز؟   : ${rep.credentials.ownerConfigured
+    ? col(C.green, 'نعم — الحساب موجود في قاعدة البيانات')
+    : col(C.yellow, 'لسه — هيتجهّز أول ما التطبيق يشتغل')}`);
   console.log(col(C.dim, `   ${rep.credentials.note}`));
 
   if (rep.warnings.length) {

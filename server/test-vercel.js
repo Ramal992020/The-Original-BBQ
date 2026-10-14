@@ -32,8 +32,14 @@ const check = (name, cond, extra = '') => {
     UPSTASH_REDIS_REST_TOKEN: 'test-token',
     VERCEL: '1',
     PORT: '3199',
-    /* اختبار إن كلمة سر الأدمن جاية من البيئة (زي ما هتبقى على Vercel) */
-    ADMIN_PASSWORD: 'Bbq#Strong2026',
+    BBQ_ENV_FILE: '',
+    ADMIN_EMAIL: 'owner@bbq.test',
+    ADMIN_PASSWORD: 'test-owner-password',
+    ADMIN_PASSWORD_HASH: '',
+    SEED_DEMO: '0',
+    DEMO_LOGIN: '0',
+    ALLOW_DEMO_PAYMENTS: '0',
+    /* روابط النشر — نفس اللي docs/VERCEL-UPSTASH.md بيقولك تحطّهم في Vercel */
     APP_URL: 'https://bbq-test.vercel.app',
   };
 
@@ -66,10 +72,12 @@ const check = (name, cond, extra = '') => {
   const out3 = (await execFile('node', [path.join(__dirname, 'vercel-runner.js'), 'env-report'], { env, encoding: 'utf8' })).stdout;
   const o3 = JSON.parse(out3.trim().split('\n').pop());
   check('التخزين دائم (redis) على وضع Vercel', o3.storage === 'redis', o3.storage);
-  check('كلمة سر الأدمن جاية من ADMIN_PASSWORD', o3.adminFromEnv === true && o3.loginWithEnvPassword === 200);
-  check('كلمة السر الافتراضية admin123 مرفوضة', o3.loginWithDefault === 401, 'status=' + o3.loginWithDefault);
+  check('حساب صاحب المطعم متجهّز من ADMIN_EMAIL + ADMIN_PASSWORD', o3.ownerFromEnv === true && o3.ownerConfigured === true);
+  check('الدخول بيكون بكلمة سر البيئة', o3.loginWithEnvPassword === 200, 'status=' + o3.loginWithEnvPassword);
+  check('كلمة السر الافتراضية admin123 مرفوضة (مفيش حساب تجريبي على الإنتاج)', o3.loginWithDefault === 401, 'status=' + o3.loginWithDefault);
   check('APP_URL متسجّل صح', o3.appUrl === 'https://bbq-test.vercel.app', o3.appUrl);
   check('‎/api/health بيأكد إن البيانات دائمة', o3.persistent === true);
+  check('‎/api/health بيأكد إن كلمة السر من البيئة', o3.ownerFromEnvHealth === true);
   check('اتصال Upstash شغال (PING)', o3.ping === true, String(o3.pingError || o3.ping));
 
   console.log('\n' + '─'.repeat(58));
