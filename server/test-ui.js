@@ -475,3 +475,28 @@ test('an in-flight history response cannot overwrite the next logged-in customer
   await loading;
   assert.equal(ui.evaluate('MY.orders[0].id'), 'new-order');
 });
+
+test('setup lockout renders the hosting-fix guide, not the misleading offline page', async () => {
+  const ui = harness({ hash: '#/setup' });
+  assert.equal(ui.evaluate("isSetupError({ code: 'STORAGE_UNAVAILABLE' })"), true);
+  assert.equal(ui.evaluate("isSetupError({ code: 'OWNER_NOT_CONFIGURED' })"), true);
+  assert.equal(ui.evaluate("isSetupError({ status: 500 })"), false);
+
+  ui.evaluate(`lastSetupError = { code: 'STORAGE_UNAVAILABLE',
+    detail: 'السبب: قاعدة البيانات الدائمة (Upstash Redis) مش متوصلة',
+    setup: { serverless: true, storage: 'redis', missing: ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'APP_URL'], invalid: [] } };`);
+  await ui.evaluate('render()');
+  assert.match(ui.view.innerHTML, /إعدادات الاستضافة ناقصة/);
+  assert.match(ui.view.innerHTML, /upstash\.com/);
+  assert.match(ui.view.innerHTML, /UPSTASH_REDIS_REST_URL/);
+  assert.match(ui.view.innerHTML, /Redeploy/);
+  assert.match(ui.view.innerHTML, /لو أنت عميل/);                       // طمأنة العميل
+  assert.doesNotMatch(ui.view.innerHTML, /مش قادرين نوصل للمطعم/);        // مش صفحة التضليل
+
+  ui.evaluate(`lastSetupError = { code: 'OWNER_NOT_CONFIGURED', detail: 'السبب: حساب صاحب المطعم مش مجهّز',
+    setup: { serverless: true, storage: 'redis', missing: ['ADMIN_PASSWORD'], invalid: ['APP_URL'] } };`);
+  const html = ui.evaluate('setupPageHTML()');
+  assert.match(html, /ADMIN_PASSWORD/);
+  assert.match(html, /Settings → Environment Variables/);
+  assert.match(html, /قيم محتاجة تصحيح: <code dir="ltr">APP_URL<\/code>/);
+});

@@ -200,6 +200,22 @@ function defaultPasswordCheck() {
   return rows;
 }
 
+/* ------------------------- تقرير عام لتشخيص القفل ------------------------
+   بيترفق مع رد 503 لما الإعداد يكون ناقص (التسجيل والدخول مقفولين أصلًا)،
+   عشان صاحب المطعم يعرف الناقص من /api/health من غير دخول.
+   آمن: أسماء المتغيرات وحالتها فقط — من غير أي قيمة سرية ومن غير ping. */
+function publicReport() {
+  const vars = checkVars();
+  return {
+    serverless: SERVERLESS,
+    storage: store.MODE,                                   // redis | file
+    missing: vars.filter((v) => v.active && v.status === 'missing' && v.level === 'required').map((v) => v.key),
+    invalid: vars.filter((v) => v.active && v.status === 'invalid').map((v) => v.key),
+    ownerFromEnv: !!clean(process.env.ADMIN_PASSWORD) || hasOwnerHash(),
+    guide: 'docs/VERCEL-UPSTASH.md',
+  };
+}
+
 /* ------------------------------ التقرير الكامل --------------------------- */
 async function report({ ping = true } = {}) {
   const vars = checkVars();
@@ -259,4 +275,4 @@ async function report({ ping = true } = {}) {
   };
 }
 
-module.exports = { report, pingRedis, checkVars, syncCredentials, defaultPasswordCheck, mask, SPEC, SERVERLESS };
+module.exports = { report, publicReport, pingRedis, checkVars, syncCredentials, defaultPasswordCheck, mask, SPEC, SERVERLESS };
