@@ -199,11 +199,11 @@ test('guests get the welcome screen before any page — the mock-up art, LOGIN a
     const html = ui.view.innerHTML;
     assert.match(html, /<main class="welcome-gate is-intro" id="welcomeGate"/);
     assert.match(html, /<img class="welcome-art" src="\/img\/welcome-art\.svg\?v=[0-9a-f]{12}"[^>]*alt="Welcome to The Original BBQ/);
-    assert.match(html, /class="welcome-planet" style="background-image:url\('\/img\/welcome-pattern\.svg\?v=[0-9a-f]{12}'\)"/);
+    assert.match(html, /<div class="welcome-planet" aria-hidden="true"><\/div>/);   // the arch extender; the doodles are inside the art
     assert.ok(html.includes(`<a class="welcome-login" href="#/login${ret}" data-gate-open>`), hash);
     assert.ok(html.includes(`<a class="welcome-register" href="#/signup${ret}" data-gate-open>`), hash);
     assert.match(html, />LOGIN<\/span><span class="sr-only"> — تسجيل الدخول</);
-    assert.match(html, />Register<b>!<\/b><\/span><span class="sr-only"> — إنشاء حساب جديد</);
+    assert.match(html, />Register!<\/span><span class="sr-only"> — إنشاء حساب جديد</);   // the art draws the glyphs; the link is a transparent overlay
     assert.match(html, /<h1 class="sr-only">/);
     assert.doesNotMatch(html, /class="nav-item|app-header|ordering-page|role="dialog"/);
     assert.equal(ui.document.body.classList.contains('is-gated'), true);
@@ -215,13 +215,15 @@ test('guests get the welcome screen before any page — the mock-up art, LOGIN a
 test('the welcome art files exist, are cache-busted by content, and keep the mock-up palette', () => {
   const crypto = require('node:crypto');
   const app = source('app.js');
-  for (const file of ['welcome-art.svg', 'welcome-pattern.svg']) {
+  for (const file of ['welcome-art.svg']) {
     const svg = source('img/' + file);
     const hash = crypto.createHash('sha256').update(svg).digest('hex').slice(0, 12);
     assert.ok(app.includes(`/img/${file}?v=${hash}`), file + ' cache-busting hash');
     assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
     assert.doesNotMatch(svg, /<script|NaN|href="(?!#)/);
   }
+  assert.ok(!app.includes('welcome-pattern'), 'the stand-in doodle pattern is gone now that the original art carries its own');
+  assert.ok(!require('node:fs').existsSync(require('node:path').join(__dirname, '..', 'public', 'img', 'welcome-pattern.svg')));
   const art = source('img/welcome-art.svg');
   assert.match(art, /viewBox="-438\.2 -174 228 498"/);
   for (const colour of ['#9B0F14', '#9D0E12', '#E62823', '#FFFFFF']) assert.ok(art.includes(colour), colour);

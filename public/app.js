@@ -1054,9 +1054,10 @@ function viewOrderPage(id) {
    قوس رمادي عليه رسومات الأكل، الشواية في النص) وعليه زرار LOGIN وRegister!.
    الفورمات بتفتح فوق التصميم كشيت من تحت. مفيش تصفح من غير حساب: أي صفحة بتتفتح وانت مش
    مسجّل بتعرض الشاشة دي، وبعد الدخول بترجع للصفحة اللي كنت طالبها (return).
-   الرسومات في public/img/welcome-*.svg ومقاساتها بوحدات التصميم نفسه (إطار ٢٢٨×٤٩٨) — شوف styles.css. */
-const WELCOME_ART = '/img/welcome-art.svg?v=17e3e85400b9';
-const WELCOME_PATTERN = '/img/welcome-pattern.svg?v=7ea8022cdd8f';
+   الرسمة في public/img/welcome-art.svg — التصدير الأصلي اللي جايبه المالك (فيها الدودلز وزرار LOGIN
+   وRegister! مرسومين جوّاها) ومقاساتها بوحدات التصميم نفسه (إطار ٢٢٨×٤٩٨) — الروابط الحقيقية overlays
+   شفافة فوق الرسمة بالظبط، شوف styles.css. */
+const WELCOME_ART = '/img/welcome-art.svg?v=0ae3168c40f3';
 const AUTH_SHEETS = ['login', 'signup', 'forgot', 'reset'];
 const GATE_ROUTES = ['welcome', ...AUTH_SHEETS];
 let gateWasOpen = false;      // آخر رسم كان شاشة الترحيب؟ (أنيميشن الدخول أول مرة بس)
@@ -1064,9 +1065,7 @@ let gateSheetWasOpen = '';    // الشيت اللي كان مفتوح في آخ
 let sheetFromGate = false;    // الشيت اتفتح من زرار في الشاشة نفسها؟ → القفل = رجوع خطوة
 
 /* الضيف بيشوف التصميم لحد ما الملف يتحمّل في الخلفية أثناء شاشة التحميل */
-if (!api.token && typeof Image === 'function') {
-  for (const src of [WELCOME_ART, WELCOME_PATTERN]) { const img = new Image(); img.decoding = 'async'; img.src = src; }
-}
+if (!api.token && typeof Image === 'function') { const img = new Image(); img.decoding = 'async'; img.src = WELCOME_ART; }
 
 /* null = التطبيق العادي، '' = شاشة الترحيب لوحدها، غير كده = الشاشة + الشيت ده */
 function gateSheet(r) {
@@ -1109,14 +1108,13 @@ function welcomeHTML(sheet, r) {
   <main class="welcome-gate${gateWasOpen ? '' : ' is-intro'}${sheet ? ' has-sheet' : ''}" id="welcomeGate" data-ret="${h(ret)}">
     <h1 class="sr-only">أهلًا بيك في ${h(S.name || 'The Original BBQ')} — سجّل دخولك أو أنشئ حساب عشان تبدأ تطلب</h1>
     <div class="welcome-stage"${sheet ? ' inert' : ''}>
-      <div class="welcome-planet" style="background-image:url('${WELCOME_PATTERN}')" aria-hidden="true"></div>
+      <div class="welcome-planet" aria-hidden="true"></div>
       <img class="welcome-art" src="${WELCOME_ART}" width="228" height="498" alt="Welcome to The Original BBQ — Premium Quality — Menu" lang="en" draggable="false">
       <a class="welcome-login" href="#/${withReturn('login', ret)}" data-gate-open>
-        <span class="welcome-login-tab" aria-hidden="true">${gateIcon('lock')}</span>
-        <span class="welcome-login-text" lang="en" dir="ltr">LOGIN</span><span class="sr-only"> — تسجيل الدخول</span>
+        <span class="sr-only" lang="en" dir="ltr">LOGIN</span><span class="sr-only"> — تسجيل الدخول</span>
       </a>
       <a class="welcome-register" href="#/${withReturn('signup', ret)}" data-gate-open>
-        <span class="welcome-register-text" lang="en" dir="ltr">Register<b>!</b></span><span class="sr-only"> — إنشاء حساب جديد</span>
+        <span class="sr-only" lang="en" dir="ltr">Register!</span><span class="sr-only"> — إنشاء حساب جديد</span>
       </a>
     </div>
     ${sheet ? authPageHTML(sheet, sheet === 'reset' ? r.q : new URLSearchParams(withReturn('', ret).slice(1))) : ''}
