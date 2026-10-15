@@ -56,6 +56,7 @@ function icon(name) {
     pin: '<path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 0 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',
     chat: '<path d="M21 11a9 9 0 0 1-9 9 10 10 0 0 1-4-.8L3 21l1.8-5A9 9 0 1 1 21 11Z"/><path d="M8 10h8M8 14h5"/>',
     chef: '<path d="M7 15a5 5 0 0 1-2-9 4 4 0 0 1 7-2 4 4 0 0 1 7 2 5 5 0 0 1-2 9v6H7Z"/><path d="M7 17h10"/>',
+    sliders: '<path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/>',
   };
   return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths[name] || paths.flame}</svg>`;
 }
@@ -292,6 +293,7 @@ function headerHTML(active) {
       <a class="brand" href="#/" aria-label="${h(S.name || 'The Original BBQ')} — الرئيسية">
         <span class="logo-container"><img class="app-logo" src="/img/logo.svg?v=fba50bf4289a" alt="شعار The Original BBQ الكامل" width="56" height="40" /></span>
         <span class="brand-text header-info">
+          ${ME ? `<span class="brand-greet">أهلًا ${h(String(ME.name || '').split(' ')[0] || 'يا صديقي')} 👋</span>` : ''}
           <span class="brand-name" dir="auto">${h((S.name || 'The Original BBQ').toUpperCase())}</span>
           <span class="brand-sub tagline">${h(S.tagline || 'مشاوي على الفحم')} · على أصوله</span>
         </span>
@@ -313,14 +315,19 @@ function headerHTML(active) {
 
 function navHTML(active) {
   const items = navItems();
+  /* 5 عناصر (عميل): السلة بتاعتنا في النص — بتطلع كزر دائري كبير فوق الشريط زي تطبيقات الدليفري */
+  const bump = items.length === 5;
   return `
-  <nav class="nav bottom-nav" aria-label="التنقل السريع">
+  <nav class="nav bottom-nav ${bump ? 'nav-bump' : ''}" aria-label="التنقل السريع">
     <div class="nav-inner" style="grid-template-columns:repeat(${items.length},minmax(0,1fr))">
-      ${items.map((n) => `
-        <button data-act="nav" data-to="${n.to}" class="nav-item ${active === n.to ? 'active on' : ''}" ${active === n.to ? 'aria-current="page"' : ''}>
+      ${items.map((n) => {
+        const cls = ['nav-item', n.to === 'cart' && bump ? 'nav-cta' : null, active === n.to ? 'active on' : null].filter(Boolean).join(' ');
+        return `
+        <button data-act="nav" data-to="${n.to}" class="${cls}" ${active === n.to ? 'aria-current="page"' : ''}>
           <span class="ni">${icon(n.icon)}</span><span>${n.label}</span>
           ${n.cart ? `<span class="nb ${cartCount() ? '' : 'hidden'}" id="navBadge">${formatAmount(cartCount())}</span>` : ''}
-        </button>`).join('')}
+        </button>`;
+      }).join('')}
     </div>
   </nav>`;
 }
@@ -420,43 +427,155 @@ function isOpenNow() {
   return hh >= open && hh < close;
 }
 
+/* شرائح الـhero: كل حاجة جاية من بيانات المطعم الفعلية (إعدادات + تصنيفات + عروض). */
+function heroSlides() {
+  const slides = [{
+    img: '/img/ai-hero.jpg',
+    eyebrow: 'THE ORIGINAL BBQ',
+    title: 'على الفحم.<br><span>على أصوله.</span>',
+    text: 'تتبيلة الأصلي، ورائحة الفحم اللي تعرفها — اختار اللي نفسك فيه، وخلّي الباقي علينا.',
+    cta: 'اطلب دلوقتي', to: '#/orders',
+  }];
+  const offers = CATS.find((c) => c.id === 'offers');
+  if (offers && offers.image) slides.push({
+    img: offers.image,
+    eyebrow: 'عروض اليوم',
+    title: 'عروض تفتح <span>النفس</span>',
+    text: 'خصومات على أطباق مختارة — لفترة محدودة.',
+    cta: 'شوف العروض', to: '#/orders?cat=' + encodeURIComponent(offers.name),
+  });
+  const meals = CATS.find((c) => c.id === 'meals');
+  if (meals && meals.image) slides.push({
+    img: meals.image,
+    eyebrow: 'وجبات متكاملة',
+    title: 'وجبة واحدة <span>تكفي</span>',
+    text: 'ميكسات جريل ووجبات كاملة بمشروباتها — جاهزة على الفحم.',
+    cta: 'اطلب وجبة', to: '#/orders?cat=' + encodeURIComponent(meals.name),
+  });
+  return slides;
+}
+
+let heroTimer = null;
+let heroIndex = 0;
+function heroGo(i) {
+  const slides = $$('#heroTrack .hero-slide');
+  if (!slides.length) return;
+  heroIndex = ((i % slides.length) + slides.length) % slides.length;
+  slides.forEach((s, k) => {
+    s.classList.toggle('on', k === heroIndex);
+    if (k === heroIndex) s.removeAttribute('aria-hidden'); else s.setAttribute('aria-hidden', 'true');
+  });
+  $$('.hero-dot').forEach((d, k) => {
+    d.classList.toggle('on', k === heroIndex);
+    d.setAttribute('aria-current', k === heroIndex ? 'true' : 'false');
+  });
+}
+function bindHero() {
+  if (heroTimer) { clearInterval(heroTimer); heroTimer = null; }
+  const car = $('#heroCarousel');
+  if (!car) return;
+  const count = $$('#heroTrack .hero-slide').length;
+  if (count <= 1) return;
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) return;
+  const start = () => { if (!heroTimer) heroTimer = setInterval(() => heroGo(heroIndex + 1), 5200); };
+  start();
+  car.addEventListener('mouseenter', () => { if (heroTimer) { clearInterval(heroTimer); heroTimer = null; } });
+  car.addEventListener('mouseleave', start);
+}
+
+/* كارت مدمج لصفحة الرئيسية (صورة فوق + اسم + سعر + زر إضافة) — شكل "الاكثر طلبًا" */
+function pickBadge(it) {
+  if (it.available === false) return '<span class="pick-tag off">نفد اليوم</span>';
+  if (it.spicy) return '<span class="pick-tag hot">🔥 حار</span>';
+  if (it.featured) return '<span class="pick-tag best">الأكثر طلبًا</span>';
+  if (it.cat === 'offers') return '<span class="pick-tag offer">عرض</span>';
+  return '';
+}
+function pickCardHTML(it) {
+  const unavailable = it.available === false;
+  return `
+  <article class="pick-card" data-menu-id="${h(it.id)}">
+    <button class="pick-img" data-act="item" data-id="${h(it.id)}" aria-label="تفاصيل ${h(it.name)}">
+      ${it.image ? `<img src="${h(it.image)}" alt="" loading="lazy" decoding="async">` : ''}${pickBadge(it)}
+    </button>
+    <div class="pick-body">
+      <h3 class="pick-name"><button data-act="item" data-id="${h(it.id)}">${h(it.name)}</button></h3>
+      <p class="pick-desc">${h(it.desc || catName(it.cat) || '')}</p>
+      <div class="pick-foot">
+        ${it.noPrice ? '<span class="pick-special">عرض خاص</span>'
+          : `<span class="price">${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(it.price)}</span>`}
+        <button class="btn-add pick-add" data-act="item" data-id="${h(it.id)}" aria-label="${it.noPrice ? 'تفاصيل عرض' : 'أضف'} ${h(it.name)}${it.noPrice ? '' : ' إلى السلة'}" ${unavailable ? 'disabled' : ''}>${icon(it.noPrice ? 'chat' : 'plus')}</button>
+      </div>
+    </div>
+  </article>`;
+}
+
 function viewsHome() {
   const open = isOpenNow();
-  const featured = MENU.filter((i) => i.featured).slice(0, 6);
+  const slides = heroSlides();
+  const picks = MENU.filter((i) => i.featured).slice(0, 8);
+  const picksList = picks.length ? picks : MENU.slice(0, 8);
+  const promo = (S.promos || [])[0];
+  const promoTitle = promo ? (promo.label || (promo.type === 'percent'
+    ? `خصم ${formatAmount(promo.value)}% على أي طلب${promo.min ? ' فوق ' + money(promo.min) : ''}`
+    : promo.code)) : '';
   return `
   ${headerHTML('home')}
-  <main class="app"><div class="wrap">
-    <section class="hero" aria-labelledby="homeTitle">
-      <div class="content">
-        <div class="eyebrow">${icon('flame')} THE ORIGINAL BBQ</div>
-        <h1 id="homeTitle">على الفحم.<br> <span>على أصوله.</span></h1>
-        <p>تتبيلة الأصلي، ورائحة الفحم اللي تعرفها.<br>اختار اللي نفسك فيه، وخلّي الباقي علينا.</p>
-        <div class="btn-row">
-          <a class="btn btn-primary" href="#/orders">اطلب دلوقتي ${icon('arrow')}</a>
-          <a class="btn btn-ghost" href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener">${icon('chat')} كلّمنا</a>
-        </div>
-        <div class="hero-facts">
-          <span><span class="dot ${open ? '' : 'closed'}"></span>${open ? 'مفتوح الآن' : 'مقفول حاليًا'}</span>
-          ${S.deliveryEta ? `<span>${icon('clock')} توصيل خلال ${h(S.deliveryEta)}</span>` : ''}
-        </div>
+  <main class="app"><div class="wrap home-wrap">
+    <div class="home-status row" role="status">
+      <span class="pill"><span class="dot ${open ? '' : 'closed'}"></span>${open ? 'مفتوح الآن' : 'مقفول حاليًا'}</span>
+      ${S.deliveryEta ? `<span class="small muted">${icon('clock')} توصيل خلال ${h(S.deliveryEta)}</span>` : ''}
+      <span class="spacer"></span>
+      <a class="small home-call" href="https://wa.me/${h(S.whatsapp || '')}" target="_blank" rel="noopener">${icon('chat')} كلّمنا</a>
+    </div>
+
+    <form class="searchbar" id="homeSearchForm" role="search" action="#/orders" method="get">
+      <span class="searchbar-ico">${icon('search')}</span>
+      <input type="search" name="q" id="homeSearchInput" placeholder="دوّر على طبقك المفضل… 🍢" aria-label="ابحث في المنيو" autocomplete="off">
+      <button type="button" class="searchbar-filters" data-act="nav" data-to="orders" aria-label="كل المنيو والفلاتر">${icon('sliders')}</button>
+    </form>
+
+    <section class="hero-carousel" id="heroCarousel" aria-roledescription="carousel" aria-label="أبرز الأطباق والعروض">
+      <div class="hero-track" id="heroTrack">
+        ${slides.map((s, i) => `
+        <div class="hero-slide ${i === 0 ? 'on' : ''}" ${i ? 'aria-hidden="true"' : ''}>
+          <img src="${h(s.img)}" alt="" ${i ? 'loading="lazy"' : 'fetchpriority="high"'}>
+          <div class="hero-scrim" aria-hidden="true"></div>
+          <div class="hero-slide-content">
+            <div class="eyebrow light">${icon('flame')} ${h(s.eyebrow)}</div>
+            <h2 ${i === 0 ? 'id="homeTitle"' : ''}>${s.title}</h2>
+            <p>${h(s.text)}</p>
+            <a class="btn btn-primary btn-sm hero-cta" href="${h(s.to)}">${h(s.cta)} ${icon('arrow')}</a>
+          </div>
+        </div>`).join('')}
       </div>
-      <div class="hero-art">
-        <img src="/img/ai-hero.jpg" alt="تشكيلة مشاوي على الفحم مع الخبز والطحينة" width="900" height="600" fetchpriority="high">
-        <span class="grill-note">طعم الفحم البلدي</span>
-      </div>
+      ${slides.length > 1 ? `<div class="hero-dots" role="group" aria-label="شرائح العرض">
+        ${slides.map((s, i) => `<button type="button" class="hero-dot ${i === 0 ? 'on' : ''}" data-act="hero-dot" data-i="${i}" aria-label="الشريحة ${formatAmount(i + 1)} من ${formatAmount(slides.length)}"></button>`).join('')}
+      </div>` : ''}
     </section>
 
-    ${sectionHeaderHTML('لكل مزاج، طعم', '#/orders')}
-    <div class="cats" aria-label="تصنيفات المنيو">
+    <div class="cat-row" aria-label="تصنيفات المنيو">
+      <button class="cat-chip" data-act="nav" data-to="orders"><span class="cat-chip-ico">${icon('flame')}</span><span class="cat-chip-label">الكل</span></button>
       ${CATS.map((c) => `
-        <button class="cat" data-act="cat" data-id="${h(c.id)}">
-          <span class="thumb">${c.image ? `<img src="${h(c.image)}" alt="" loading="lazy" width="92" height="78">` : ''}</span>
-          <span class="label">${h(c.name)}</span>
+        <button class="cat-chip" data-act="cat" data-id="${h(c.id)}">
+          <span class="cat-chip-ico">${c.image ? `<img src="${h(c.image)}" alt="" loading="lazy">` : icon('flame')}</span>
+          <span class="cat-chip-label">${h(c.name)}</span>
         </button>`).join('')}
     </div>
 
-    ${sectionHeaderHTML('اختيارات الناس', '#/orders?sort=hot')}
-    <div class="menu-grid">${featured.map(itemCardHTML).join('')}</div>
+    ${sectionHeaderHTML('الاكثر طلبًا', '#/orders?sort=hot')}
+    <div class="picks-grid">${picksList.map(pickCardHTML).join('')}</div>
+
+    ${promo ? `
+    <a class="promo-strip" href="#/checkout?promo=${h(promo.code)}" aria-label="${h(promoTitle)}">
+      <span class="promo-copy">
+        <span class="promo-eyebrow">عرض حصري</span>
+        <strong>${h(promoTitle)}</strong>
+        <span class="promo-cta">اطلب دلوقتي ${icon('arrow')}</span>
+      </span>
+      <span class="promo-badge" aria-hidden="true">${promo.type === 'percent' ? formatAmount(promo.value) + '%' : h(promo.code)}</span>
+    </a>` : ''}
 
     ${sectionHeaderHTML('ليه الأصلي؟')}
     <div class="perks">
@@ -684,6 +803,10 @@ function viewsCart() {
 const TIME_SLOTS = ['في أقرب وقت', 'بعد ٣٠ دقيقة', 'بعد ساعة', 'بعد ساعتين'];
 
 function viewsCheckout() {
+  /* من شريط العرض على الرئيسية: #/checkout?promo=CODE → بنعتمد الكود تلقائيًا لو حقيقي */
+  const q = parseHash().q;
+  const promoParam = q.get('promo');
+  if (promoParam && !promoCode && (S.promos || []).some((p) => p.code === promoParam)) promoCode = promoParam;
   if (!ME) {
     return `${headerHTML('checkout')}<main class="app"><div class="wrap">
       <div class="empty" style="padding-top:60px"><div class="big">🔐</div><h3>سجّل الدخول الأول</h3>
@@ -1353,7 +1476,12 @@ function adminWhatsappHTML() {
         <div><label class="lbl">كود الدولة الافتراضي</label><input name="defaultCountryCode" value="${h(c.defaultCountryCode || '20')}" maxlength="4"></div>
         <div style="display:flex;align-items:flex-end"><button class="btn btn-sm btn-ghost btn-block" type="button" data-act="wa-test">📤 ابعت رسالة تجربة</button></div>
       </div>
-      <label class="opt" style="margin-top:12px"><span>أرسل تحديثات الحالة للعميل (لو موافق)</span>
+      <div id="waProviderWarn" class="small" style="margin-top:8px" role="note"></div>
+      <label class="opt" style="margin-top:12px;align-items:flex-start">
+        <span style="flex:1">
+          <span>وضع الموافقة الصريحة: نبلّغ بس العميل اللي موافق بنفسه</span>
+          <span class="small muted" style="display:block;margin-top:2px">لو مقفولة: كل العملاء بيستلموا التحديثات ما عدا اللي وقّف الإشعارات هو بنفسه (الأنسب عادة)</span>
+        </span>
         <input type="checkbox" name="requireOptIn" ${c.requireOptIn !== false ? 'checked' : ''}></label>
       <label class="opt"><span>ابعتلي كمان للرقم ده عند وصول طلب جديد</span>
         <input type="checkbox" name="staffEnabled" ${c.staffEnabled ? 'checked' : ''}></label>
@@ -1843,6 +1971,18 @@ function bindPage(r) {
       label.htmlFor = input.id;
     }
   });
+
+  /* الرئيسية: البحث الشريط + تشغيل الـcarousel */
+  if (r.name === 'home') {
+    const hsf = $('#homeSearchForm');
+    if (hsf) hsf.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const inp = hsf.querySelector('input[name="q"]');
+      const q = String(inp?.value || '').trim();
+      go('orders' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    });
+    bindHero();
+  }
   const si = $('#searchInput');
   if (si) {
     let t;
@@ -1871,11 +2011,12 @@ function bindPage(r) {
   if (pf) pf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(pf);
+    const body = { name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'), address: fd.get('address') };
+    /* بنسجّل تفضيل الواتساب بس لو المربع ظاهر (الميزة مفعّلة) —
+       وإلّا أي حفظ بيانات هيُسجّل العميل كـ«موقوف» من غير وعيه. */
+    if (pf.querySelector('input[name="notifyWhatsapp"]')) body.notifyWhatsapp = fd.get('notifyWhatsapp') != null;
     try {
-      const d = await api.req('/api/me', { method: 'PATCH', body: {
-        name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'), address: fd.get('address'),
-        notifyWhatsapp: fd.get('notifyWhatsapp') != null,
-      } });
+      const d = await api.req('/api/me', { method: 'PATCH', body });
       ME = d.user; toast('تم حفظ البيانات ✅');
     } catch (err) { toast(err.message); }
   });
@@ -2032,9 +2173,15 @@ function bindPage(r) {
 
   const waf = $('#waCfgForm');
   if (waf) {
+    const providerWarning = {
+      console: '⚠️ وضع التجربة: الرسالة بتتسجل في السجل هنا بس ومش بيوصلها لأي موبايل. عشان توصل للعميل فعليًا اختار مزوّد حقيقي (Meta / Twilio / Green API / CallMeBot…) واضبط مفاتيحه، وبعدين اضغط «📤 ابعت رسالة تجربة» على رقمك.',
+      link: '⚠️ وضع الرابط: السيرفر بيجهّز wa.me جاهز بيتسجل في السجل — حد المطعم هو اللي بيفتحه ويبعت يدويًا (مش إرسال تلقائي).',
+    };
     const show = () => {
       const v = $('#waProvider').value;
       $$('.wa-grp', waf).forEach((g) => { g.style.display = g.getAttribute('data-grp') === v ? '' : 'none'; });
+      const w = $('#waProviderWarn');
+      if (w) w.textContent = providerWarning[v] || '';
     };
     $('#waProvider')?.addEventListener('change', show);
     show();
@@ -2154,10 +2301,13 @@ async function submitOrder(e) {
     name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'),
     address: fd.get('address'), time: fd.get('time'), notes: fd.get('notes'),
   };
+  /* مربع الواتساب بيظهر بس لما الميزة مفعّلة — لو مش ظاهر، بنسجّل تفضيل الحساب
+     (مفعّل افتراضيًا) بدل ما نرسل «موقوف» من غير ما العميل اختار حاجة. */
+  const waBox = form.querySelector('input[name="notifyWhatsapp"]');
   const body = {
     items: cart.map((c) => ({ id: c.id, qty: c.qty, addons: c.addons, note: c.note })),
     customer, payment: fd.get('payment'), promoCode: promoCode || undefined,
-    notifyWhatsapp: fd.get('notifyWhatsapp') != null,
+    notifyWhatsapp: waBox ? fd.get('notifyWhatsapp') != null : (ME.notifyWhatsapp !== false),
   };
   const btn = $('button[type=submit]', form);
   if (btn) { btn.disabled = true; btn.textContent = 'بنسجّل طلبك…'; }
@@ -2201,6 +2351,7 @@ document.addEventListener('click', async (e) => {
     case 'theme': toggleTheme(); break;
     case 'nav': go(el.getAttribute('data-to')); break;
     case 'cat': { const c = CATS.find((x) => x.id === id); go('orders?cat=' + encodeURIComponent(c ? c.name : '')); break; }
+    case 'hero-dot': { heroGo(Number(el.getAttribute('data-i')) || 0); bindHero(); break; }
     case 'clear-menu': go('orders'); break;
     case 'filter': {
       const c = CATS.find((x) => x.id === id);

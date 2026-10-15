@@ -67,7 +67,7 @@ function logEntry(e) {
   return row;
 }
 
-async function fetchT(url, opts = {}, ms = 12000) {
+async function fetchT(url, opts = {}, ms = 8000) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), ms);
   try { return await fetch(url, { ...opts, signal: ac.signal }); }
@@ -183,27 +183,41 @@ function varsFor(order) {
   };
 }
 
-/** إشعار العميل بتغيير حالة طلبه */
+/** تسجيل رسالة اتسببت (عشان الأدمن يشوف السبب في سجل الواتساب) */
+function skipEntry(order, statusId, type, reason) {
+  const cfg = CFG();
+  const tpl = (cfg.templates && cfg.templates[statusId]) || DEFAULT_TEMPLATES[statusId] || '';
+  return logEntry({
+    phone: normalizePhone(order.customer?.phone, cfg.defaultCountryCode || '20'),
+    orderId: order.id, type, result: 'skipped', error: reason,
+    message: render(tpl, varsFor(order)),
+  });
+}
+
+/**
+ * إشعار العميل بتغيير حالة طلبه.
+ * القواعد:
+ *  - إرسال يدوي من الإدارة (force) → يتجاوز كل الفلاتر (المطعم اختار يعمل).
+ *  - العميل وقّف الإشعارات بنفسه → ما بنبعتش له أبدًا (وقايد).
+ *  - وضع الموافقة الصريحة (requireOptIn) → نبلّغ بس اللي موافق بوضع مفعّل.
+ */
 async function notifyCustomer(order, statusId, opts = {}) {
   const cfg = CFG();
-  if (!cfg.enabled) return null;
-  if (cfg.notifyOn && cfg.notifyOn[statusId] === false) return null;
-  if (cfg.requireOptIn !== false && order.customer?.notifyWhatsapp === false) {
-    /* العميل موقف التحديثات — نسجّل السبب عشان الأدمن يشوفه في السجل */
-    return logEntry({
-      phone: normalizePhone(order.customer?.phone, cfg.defaultCountryCode || '20'),
-      orderId: order.id, type: 'status:' + statusId, result: 'skipped',
-      error: 'العميل موقّف تحديثات الواتساب',
-      message: render((cfg.templates && cfg.templates[statusId]) || DEFAULT_TEMPLATES[statusId] || '', varsFor(order)),
-    });
+  const force = !!opts.force;
+  const type = opts.logType || 'status:' + statusId;
+  if (!cfg.enabled && !force) return null;
+  if (!force && cfg.notifyOn && cfg.notifyOn[statusId] === false) return null;
+  if (!force) {
+    if (order.customer?.notifyWhatsapp === false) return skipEntry(order, statusId, type, 'العميل موقّف تحديثات الواتساب');
+    if (cfg.requireOptIn !== false && order.customer?.notifyWhatsapp !== true) return skipEntry(order, statusId, type, 'بانتظار موافقة العميل (وضع الموافقة الصريحة)');
   }
   const tpl = (cfg.templates && cfg.templates[statusId]) || DEFAULT_TEMPLATES[statusId];
   if (!tpl) return null;
   return send({
     phone: order.customer?.phone,
     text: render(tpl, varsFor(order)),
-    orderId: order.id, type: 'status:' + statusId,
-    force: !!opts.force,
+    orderId: order.id, type,
+    force,
   });
 }
 
@@ -217,18 +231,19 @@ async function notifyStaffWhatsapp(order, staffChat = true) {
   return Promise.all(numbers.map((n) => send({ phone: n, text, orderId: order.id, type: 'staff_new', force: true })));
 }
 
-/** إرسال رابط الدفع للعميل */
-async function sendPaymentLink(order) {
+/** إرسال رابط الدفع للعميل (نحترم إيقاف العميل إلّا إرسال يدوي من الإدارة) */
+async function sendPaymentLink(order, opts = {}) {
   const cfg = CFG();
+  if (!opts.force && order.customer?.notifyWhatsapp === false) {
+    return skipEntry(order, 'payment_link', 'payment_link', 'العميل موقّف تحديثات الواتساب');
+  }
   const tpl = (cfg.templates && cfg.templates.payment_link) || DEFAULT_TEMPLATES.payment_link;
   return send({ phone: order.customer?.phone, text: render(tpl, varsFor(order)), orderId: order.id, type: 'payment_link', force: true });
 }
 
-/** إشعار تأكيد الدفع */
-async function notifyPaid(order) {
-  const cfg = CFG();
-  const tpl = (cfg.templates && cfg.templates.paid) || DEFAULT_TEMPLATES.paid;
-  return send({ phone: order.customer?.phone, text: render(tpl, varsFor(order)), orderId: order.id, type: 'paid' });
+/** إشعار تأكيد الدفع (بنفس قواعد موافقة العميل) */
+async function notifyPaid(order, opts = {}) {
+  return notifyCustomer(order, 'paid', { ...opts, logType: 'paid' });
 }
 
 /* اختبار الإعدادات */

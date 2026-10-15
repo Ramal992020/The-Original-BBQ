@@ -346,7 +346,6 @@ async function api(req, res, u, url) {
     return send(200, { token: session.token, user: auth.publicUser(updated) });
   }
 
-  let whatsappPref = null;
   if (p === '/api/me' && req.method === 'PATCH') {
     if (!u) return bad(401, 'محتاج تسجيل دخول');
     const b = await jsonBody(req);
@@ -354,7 +353,13 @@ async function api(req, res, u, url) {
     for (const k of ['name', 'phone', 'area', 'address']) {
       if (b[k] != null) patch[k] = String(b[k]).slice(0, 300);
     }
-    if (b.notifyWhatsapp != null) { patch.notifyWhatsapp = !!b.notifyWhatsapp; whatsappPref = patch.notifyWhatsapp; }
+    if (b.notifyWhatsapp != null) {
+      const want = !!b.notifyWhatsapp;
+      /* المربع اللي بيقفل الإشعارات بيظهر للعميل بس لما الميزة مفعّلة —
+         لو مقفولة فالعميل شكلش على الاختيار أصلًا، فممنوع نسجله كـ«موقوف»
+         من غير وعيه (نسمح بالفك فقط). */
+      if (want || settings().whatsappNotify?.enabled) patch.notifyWhatsapp = want;
+    }
     const updated = store.update('users', u.id, patch);
     return send(200, { user: auth.publicUser(updated) });
   }
@@ -392,6 +397,15 @@ async function api(req, res, u, url) {
     const isOnline = method.kind === 'online';
 
     const number = store.nextOrderNumber();
+    /* موافقة العميل على الواتساب — بنسجّلها بوضوح على الطلب:
+       - الميزة مفعّلة: اختياره في صفحة إتمام الطلب (مفعّل افتراضيًا).
+       - الميزة مقفولة: بيتمسك بتفضيل حسابه (مفعّل افتراضيًا) — عشان لما
+         المطعم يفعّلها بعد كده، الطلبات اللي اتسجلت في الفترة دي مش
+         تتعامل كـ«العميل موقّف» من غير ما يكون اختار فعلًا. */
+    const featureOn = !!(s.whatsappNotify && s.whatsappNotify.enabled);
+    const waConsent = featureOn
+      ? (b.notifyWhatsapp !== false && c.notifyWhatsapp !== false)
+      : (u.notifyWhatsapp !== false);
     const order = {
       id: 'BBQ-' + number,
       number,
@@ -402,7 +416,7 @@ async function api(req, res, u, url) {
         area: String(c.area || '').slice(0, 120), address: String(c.address).slice(0, 400),
         notes: String(c.notes || '').slice(0, 400), time: String(c.time || 'في أقرب وقت').slice(0, 60),
         email: u.email,
-        notifyWhatsapp: b.notifyWhatsapp !== false && c.notifyWhatsapp !== false,
+        notifyWhatsapp: !!waConsent,
       },
       payment: method.id,
       paymentLabel: method.label,
@@ -777,7 +791,7 @@ async function api(req, res, u, url) {
           try { await payments.createPayment(order); } catch (e) { return bad(400, e.message); }
           order = store.find('orders', (o) => o.id === order.id);
         }
-        row = await whatsapp.sendPaymentLink(order);
+        row = await whatsapp.sendPaymentLink(order, { force: true });   // إرسال يدوي من الإدارة
       } else {
         row = await whatsapp.notifyCustomer(order, b.status || order.status, { force: true });
       }
