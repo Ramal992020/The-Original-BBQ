@@ -315,22 +315,26 @@ function headerHTML(active) {
 
 function navHTML(active) {
   const items = navItems();
-  /* 5 عناصر (عميل): السلة بتاعتنا في النص — بتطلع كزر دائري كبير فوق الشريط زي تطبيقات الدليفري */
-  const bump = items.length === 5;
+  /* شريط عائم بحواف دائرية: القسم الحالي دايرة مليانة فيها الأيقونة والاسم،
+     والسلة دايمًا دايرة بارزة عليها عدد الأصناف. الطاقم عندهم قسم سادس (الإدارة) فالدواير بتصغر شوية. */
   return `
-  <nav class="nav bottom-nav ${bump ? 'nav-bump' : ''}" aria-label="التنقل السريع">
+  <nav class="nav bottom-nav ${items.length > 5 ? 'nav-many' : ''}" aria-label="التنقل السريع">
     <div class="nav-inner" style="grid-template-columns:repeat(${items.length},minmax(0,1fr))">
       ${items.map((n) => {
-        const cls = ['nav-item', n.to === 'cart' && bump ? 'nav-cta' : null, active === n.to ? 'active on' : null].filter(Boolean).join(' ');
+        const cls = ['nav-item', n.cart ? 'nav-cta' : null, active === n.to ? 'active on' : null].filter(Boolean).join(' ');
         return `
-        <button data-act="nav" data-to="${n.to}" class="${cls}" ${active === n.to ? 'aria-current="page"' : ''}>
-          <span class="ni">${icon(n.icon)}</span><span>${n.label}</span>
+        <button data-act="nav" data-to="${n.to}" class="${cls}" ${active === n.to ? 'aria-current="page"' : ''}${n.cart ? ` title="${n.label}"` : ''}>
+          <span class="ni">${icon(n.icon)}</span><span class="nl">${n.label}</span>
           ${n.cart ? `<span class="nb ${cartCount() ? '' : 'hidden'}" id="navBadge">${formatAmount(cartCount())}</span>` : ''}
         </button>`;
       }).join('')}
     </div>
   </nav>`;
 }
+
+/* الهيدر من غير خط فاصل: ظل خفيف بيظهر بس لما الصفحة تنزل لتحت. */
+const syncScrolled = () => document.documentElement.classList.toggle('is-scrolled', (window.scrollY || 0) > 4);
+window.addEventListener('scroll', syncScrolled, { passive: true });
 
 function footerHTML() {
   return `
@@ -1958,7 +1962,7 @@ async function render(opts = {}) {
 
   view.innerHTML = html + navHTML(r.name === 'order' ? 'my-orders' : r.name === 'menu' ? 'orders' : r.name);
   if (!opts.soft || opts.scroll) window.scrollTo({ top: 0 });
-  renderCartBar(); updateBadges(); bindPage(r); updateThemeControls();
+  renderCartBar(); updateBadges(); bindPage(r); updateThemeControls(); syncScrolled();
 }
 
 /* ============================== ١٨) ربط عناصر الصفحة ============================== */

@@ -13,7 +13,11 @@
   --radius-sm: 10px;
   --maxw: 1120px;
   --header-h: 76px;
-  --nav-h: 70px;
+  --nav-h: 68px;       /* height of the floating bottom dock */
+  --nav-gap: 12px;     /* space between the dock and the bottom edge */
+  --nav-bottom: max(var(--nav-gap), env(safe-area-inset-bottom, 0px)); /* on iPhone: just above the home bar */
+  --nav-dot: 56px;     /* diameter of the round active/cart buttons */
+  --nav-maxw: 480px;
   --font: 'Tajawal', Tahoma, sans-serif;
   --font-heading: 'Cairo', Tahoma, sans-serif;
 }
@@ -61,6 +65,18 @@
   --toast-bg: #221A14;
   --shadow-cta: 0 2px 8px rgba(157, 15, 20, .4);
   --wa-grp-bg: rgba(246, 140, 29, .025);
+  /* Round header buttons and the floating bottom dock. */
+  --soft-bg: #1A1410;
+  --soft-border: rgba(245, 237, 224, .08);
+  --soft-shadow: 0 10px 22px -10px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(245, 237, 224, .05);
+  --header-shadow: 0 12px 28px -18px rgba(0, 0, 0, .95);
+  --dock-bg: rgba(26, 20, 16, .92);
+  --dock-solid: #1A1410;
+  --dock-border: rgba(245, 237, 224, .08);
+  --dock-shadow: 0 18px 40px -14px rgba(0, 0, 0, .95), 0 4px 18px rgba(246, 140, 29, .08);
+  --nav-on-shadow: 0 6px 16px -4px rgba(232, 40, 35, .6);
+  --nav-badge-bg: #FFF200;
+  --nav-badge-text: #9D0F14;
 }
 
 [data-theme='night'], [data-theme='light'] {
@@ -96,6 +112,17 @@
   --toast-bg: #FFFFFF;
   --shadow-cta: 0 2px 8px rgba(0, 0, 0, .12);
   --wa-grp-bg: rgba(157, 15, 20, .02);
+  --soft-bg: #FFFFFF;
+  --soft-border: rgba(232, 224, 212, .75);
+  --soft-shadow: 5px 7px 16px -4px rgba(120, 80, 40, .2), -4px -4px 12px rgba(255, 255, 255, .9);
+  --header-shadow: 0 12px 26px -18px rgba(120, 80, 40, .5);
+  --dock-bg: rgba(255, 255, 255, .94);
+  --dock-solid: #FFFFFF;
+  --dock-border: rgba(232, 224, 212, .9);
+  --dock-shadow: 0 16px 36px -12px rgba(120, 80, 40, .32), 0 2px 8px rgba(120, 80, 40, .06);
+  --nav-on-shadow: 0 6px 14px -4px rgba(157, 15, 20, .5);
+  --nav-badge-bg: #C41E1A;
+  --nav-badge-text: #FFF200;
 }
 
 * { box-sizing: border-box; }
@@ -136,8 +163,8 @@ input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--accen
 label.lbl { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
 
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 12px; }
-.app { position: relative; z-index: 1; padding-bottom: calc(var(--nav-h) + 20px + env(safe-area-inset-bottom, 0px)); }
-body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-area-inset-bottom, 0px)); }
+.app { position: relative; z-index: 1; padding-bottom: calc(var(--nav-h) + var(--nav-bottom) + 20px); }
+body.cart-visible .app { padding-bottom: calc(var(--nav-h) + var(--nav-bottom) + 104px); }
 #view { position: relative; z-index: 1; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
@@ -157,14 +184,18 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 }
 .skip-link:focus { transform: none; }
 
-/* Header: the whole wide logo, never the cropped square app icon. */
+/* Header: the whole wide logo on the start side, round soft action buttons on the end side.
+   No hard divider line — a soft shadow appears only once the page scrolls (html.is-scrolled). */
 .header {
   position: sticky; top: 0; z-index: 100;
-  background: var(--bg); border-bottom: 2px solid var(--fire-dark);
-  transition: background-color .2s ease;
+  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15); backdrop-filter: blur(14px) saturate(1.15);
+  transition: background-color .2s ease, box-shadow .2s ease;
 }
+.is-scrolled .header { box-shadow: var(--header-shadow); }
 .header-inner {
-  max-width: var(--maxw); min-height: var(--header-h); margin: auto; padding: 12px;
+  max-width: var(--maxw); min-height: var(--header-h); margin: auto; padding: 12px 16px;
   display: flex; align-items: center; gap: 12px;
 }
 .header .brand { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
@@ -173,7 +204,7 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 }
 .app-logo { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(246, 140, 29, .3)); }
 [data-theme='night'] .logo-container, [data-theme='light'] .logo-container {
-  background: #1A1410; padding: 4px 6px; border-radius: 8px;
+  background: #1A1410; padding: 4px 6px; border-radius: 12px; box-shadow: var(--soft-shadow);
 }
 [data-theme='night'] .app-logo, [data-theme='light'] .app-logo { filter: none; }
 .header .brand-text { min-width: 0; }
@@ -182,37 +213,54 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
   font-size: 17px; line-height: 1.25; letter-spacing: .5px; white-space: nowrap;
 }
 .header .brand-sub { display: block; margin-top: 5px; font-size: 11px; color: var(--fire-orange); white-space: nowrap; }
-.header-links { display: flex; align-items: center; gap: 28px; margin-inline: 20px 32px; }
-.header-links a { position: relative; padding-block: 8px; font-family: var(--font-heading); font-size: 12px; font-weight: 700; color: var(--muted); }
-.header-links a.active { color: var(--text-primary); }
-.header-links a.active::after { content: ''; position: absolute; bottom: 0; inset-inline: 0; height: 2px; background: var(--fire-orange); }
-.header-actions { display: flex; gap: 8px; }
-.icon-btn {
-  width: 38px; height: 38px; border-radius: 10px; flex: none; position: relative;
-  display: grid; place-items: center; background: var(--bg-surface);
-  border: 1px solid var(--border); transition: transform .15s, background-color .2s;
+/* Wide screens: the page links sit in one rounded capsule; the current page is a filled pill. */
+.header-links {
+  display: flex; align-items: center; gap: 4px; margin-inline: 16px 20px; padding: 5px;
+  border-radius: 999px; background: var(--soft-bg); border: 1px solid var(--soft-border); box-shadow: var(--soft-shadow);
 }
-.icon-btn:active { transform: scale(.95); }
+.header-links a {
+  padding: 8px 16px; border-radius: 999px; line-height: 1.5;
+  font-family: var(--font-heading); font-size: 12.5px; font-weight: 700; color: var(--muted);
+  transition: background-color .15s ease, color .15s ease;
+}
+.header-links a:hover { color: var(--text-primary); }
+.header-links a.active { background: var(--fire-dark); color: #FFF200; box-shadow: var(--nav-on-shadow); }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.icon-btn {
+  width: 40px; height: 40px; border-radius: 50%; flex: none; position: relative;
+  display: grid; place-items: center; background: var(--bg-surface); color: var(--text-primary);
+  border: 1px solid var(--border); transition: transform .15s ease, background-color .2s ease, color .15s ease;
+}
+.icon-btn:active { transform: scale(.94); }
+.header-actions .icon-btn {
+  width: 48px; height: 48px; background: var(--soft-bg); border-color: var(--soft-border); box-shadow: var(--soft-shadow);
+}
+.header-actions .icon-btn .ui-icon { width: 22px; height: 22px; }
+@media (hover: hover) { .header-actions .icon-btn:hover { color: var(--link); } }
 .badge-n {
-  position: absolute; top: -5px; inset-inline-start: -5px; min-width: 18px; height: 18px; padding: 0 4px;
-  border-radius: 6px; font-size: 10px; font-weight: 700; background: var(--fire-dark); color: #FFF200;
-  display: grid; place-items: center;
+  position: absolute; top: -3px; inset-inline-start: -3px; min-width: 20px; height: 20px; padding: 0 5px;
+  border-radius: 999px; font-family: var(--font-heading); font-size: 10.5px; font-weight: 800; line-height: 1;
+  background: var(--fire-dark); color: #FFF200; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg);
 }
 .badge-n.red { background: var(--fire-dark); color: #FFF200; }
 @media (max-width: 760px) { .header-links { display: none; } }
 @media (max-width: 440px) {
   :root { --header-h: 70px; }
-  .header-inner { gap: 8px; }
+  .header-inner { gap: 8px; padding-inline: 12px; }
   .header .brand { gap: 8px; }
   .header .brand-name { font-size: 14px; }
   .header .brand-sub { font-size: 10px; }
-  .header-actions { gap: 6px; }
+  .header-actions { gap: 8px; }
   .header-phone { display: none; }
-  .icon-btn { width: 34px; height: 36px; }
+  .header-actions .icon-btn { width: 44px; height: 44px; }
+  .header-actions .icon-btn .ui-icon { width: 21px; height: 21px; }
 }
 @media (max-width: 350px) {
   .header .brand-name { font-size: 12px; }
   .header-inner { padding-inline: 10px; }
+  .header-actions { gap: 6px; }
+  .header-actions .icon-btn { width: 40px; height: 40px; }
+  .header-actions .icon-btn .ui-icon { width: 20px; height: 20px; }
 }
 
 @media (max-width: 360px) {
@@ -393,9 +441,9 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 /* Small orange text needs a deeper logo colour on warm white for legibility. */
 [data-theme='night'] .hero h1 span, [data-theme='light'] .hero h1 span,
 [data-theme='night'] .eyebrow, [data-theme='night'] .brand-sub,
-[data-theme='night'] .footer-brand span, [data-theme='night'] .nav-item.active,
+[data-theme='night'] .footer-brand span,
 [data-theme='light'] .eyebrow, [data-theme='light'] .brand-sub,
-[data-theme='light'] .footer-brand span, [data-theme='light'] .nav-item.active { color: var(--fire-dark); }
+[data-theme='light'] .footer-brand span { color: var(--fire-dark); }
 @media (hover: hover) {
   .menu-card:hover { transform: translateY(-2px); }
   .btn-add:hover { background: var(--fire-dark); color: #FFF200; }
@@ -418,12 +466,13 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 .qty { display: inline-flex; align-items: center; gap: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
 .qty button { width: 30px; height: 30px; border-radius: 50%; font-size: 17px; font-weight: 800; display: grid; place-items: center; color: var(--link); }
 .qty .n { min-width: 26px; text-align: center; font-weight: 800; }
+/* Sits on top of the floating dock with the same width and rounded ends. */
 .floating-cart {
-  position: fixed; z-index: 90; inset-inline: 16px;
-  bottom: calc(var(--nav-h) + 12px + env(safe-area-inset-bottom, 0px));
-  max-width: calc(var(--maxw) - 32px); width: calc(100% - 32px); margin: 0 auto;
+  position: fixed; z-index: 90; inset-inline: 12px;
+  bottom: calc(var(--nav-h) + var(--nav-bottom) + 10px);
+  max-width: var(--nav-maxw); width: calc(100% - 24px); margin: 0 auto;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 20px; border-radius: 14px;
+  padding: 12px 22px; border-radius: 999px;
   background: linear-gradient(135deg, #9D0F14, #E82823); color: #FFF200;
   border: 1px solid rgba(255, 242, 0, .2); box-shadow: 0 8px 24px rgba(232, 40, 35, .35);
   font-family: var(--font-heading); font-weight: 700; font-size: 14px;
@@ -438,10 +487,11 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 .cart-bar-action .ui-icon { width: 18px; height: 18px; }
 [data-theme='night'] .floating-cart, [data-theme='light'] .floating-cart { background: #1A1410; color: #FFF200; border: 1px solid #333; box-shadow: 0 4px 16px rgba(0,0,0,.1); }
 @media (max-width: 440px) {
-  .floating-cart { padding: 12px; font-size: 12px; gap: 8px; }
+  .floating-cart { padding: 10px 18px; font-size: 12px; gap: 8px; }
   .cart-bar-info { gap: 6px; }
   .cart-bar-action { gap: 8px; }
 }
+@media (max-width: 400px) { .floating-cart { inset-inline: 8px; width: calc(100% - 16px); } }
 .sheet-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(0,0,0,.62); backdrop-filter: blur(3px); display: flex; align-items: flex-end; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s ease; }
 .sheet-backdrop.show { opacity: 1; pointer-events: auto; }
 .sheet { width: 100%; max-width: 620px; max-height: 92vh; max-height: 92dvh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-bottom: 0; border-radius: 22px 22px 0 0; }
@@ -514,23 +564,95 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
 .drawer .dhead { position: sticky; top: 0; background: var(--surface); z-index: 2; padding: 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
 .drawer .dbody { padding: 14px; }
 
+/* Bottom navigation: a floating rounded dock. The current section becomes a filled circle that
+   holds its icon and name; the cart is always a filled circle with a round count badge. */
 .bottom-nav {
   position: fixed; z-index: 100; bottom: 0; inset-inline: 0;
-  height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
-  background: var(--bg-surface); border-top: 1px solid var(--border);
-  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  padding: 0 12px var(--nav-bottom);
+  pointer-events: none; /* Only the dock itself takes taps; the gap around it stays scrollable. */
 }
-.nav-inner { display: grid; max-width: var(--maxw); height: 100%; margin: auto; }
-.nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; color: var(--muted); position: relative; min-width: 0; }
-.nav-item .ni { display: grid; place-items: center; height: 22px; }
-.nav-item .ui-icon { width: 21px; height: 21px; }
-.nav-item.active { color: var(--fire-orange); font-weight: 700; }
-.nav-item::after { content: ''; width: 20px; height: 3px; border-radius: 2px; margin-top: 1px; background: transparent; }
-.nav-item.active::after { background: linear-gradient(90deg, var(--fire-red), var(--fire-orange), var(--fire-yellow)); }
-.nav-item .nb { position: absolute; top: 0; inset-inline-start: 50%; margin-inline-start: 7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 5px; background: var(--fire-dark); color: #FFF200; font-size: 10px; font-weight: 700; display: grid; place-items: center; }
-@media (max-width: 440px) { .nav-item { font-size: 10px; } }
+/* Content fades out under the floating dock instead of showing through the gap below it. */
+.bottom-nav::before {
+  content: ''; position: absolute; z-index: -1; inset-inline: 0; bottom: 0;
+  height: calc(var(--nav-h) / 2 + var(--nav-bottom));
+  background: linear-gradient(to top, var(--bg) 40%, transparent);
+}
+.nav-inner {
+  display: grid; align-items: center; max-width: var(--nav-maxw); height: var(--nav-h); margin: 0 auto; padding: 0 6px;
+  border-radius: 999px; background: var(--dock-solid); background: var(--dock-bg);
+  border: 1px solid var(--dock-border); box-shadow: var(--dock-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2);
+  pointer-events: auto;
+}
+.nav-many { --nav-maxw: 560px; }
+body:has(.nav-many) { --nav-maxw: 560px; } /* Separate rule: lets the floating cart match the wider staff dock. */
+.nav-item {
+  position: relative; z-index: 0; min-width: 0; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-family: var(--font-heading); font-size: 10.5px; font-weight: 700; line-height: 1.25; color: var(--muted);
+  -webkit-tap-highlight-color: transparent; transition: color .15s ease;
+}
+/* The round "dot" behind the icon: invisible until the item is current, focused or hovered. */
+.nav-item::before {
+  content: ''; position: absolute; z-index: -1; top: 50%; left: 50%;
+  width: var(--nav-dot); height: var(--nav-dot); border-radius: 50%;
+  transform: translate(-50%, -50%); background: transparent;
+  transition: background-color .2s ease, box-shadow .2s ease, transform .15s ease;
+}
+.nav-item .ni { display: grid; place-items: center; }
+.nav-item .ui-icon { width: 22px; height: 22px; }
+.nav-item .nl { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-item.active { color: #FFF200; }
+.nav-item.active::before { background: var(--fire-dark); box-shadow: var(--nav-on-shadow); }
+.nav-item.active .ui-icon { width: 20px; height: 20px; }
+.nav-item.active .nl { max-width: calc(var(--nav-dot) - 8px); font-size: 10px; }
+/* Cart: always a filled circle; its name stays available to screen readers. */
+.nav-cta { color: var(--btn-text); }
+.nav-cta.active { color: var(--btn-text); }
+.nav-cta::before, .nav-cta.active::before { background: var(--btn-bg); box-shadow: var(--shadow-cta); }
+.nav-cta.active::before { box-shadow: 0 0 0 3px var(--dock-solid), 0 0 0 5px var(--fire-orange); }
+.nav-cta .ui-icon, .nav-cta.active .ui-icon { width: 24px; height: 24px; }
+.nav-cta .nl {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.nav-item:active::before { transform: translate(-50%, -50%) scale(.92); }
+.nav-item:focus-visible { outline: none; }
+.nav-item:focus-visible::before { box-shadow: 0 0 0 2px var(--dock-solid), 0 0 0 4px var(--fire-orange); }
+@media (hover: hover) {
+  .nav-item:not(.active):not(.nav-cta):hover { color: var(--text-primary); }
+  .nav-item:not(.active):not(.nav-cta):hover::before { background: var(--tint-ember); }
+}
+.nav-item .nb {
+  position: absolute; z-index: 1;
+  top: calc(50% - var(--nav-dot) / 2 - 3px); inset-inline-start: calc(50% - var(--nav-dot) / 2 - 4px);
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px;
+  background: var(--nav-badge-bg); color: var(--nav-badge-text); box-shadow: 0 0 0 2px var(--dock-solid);
+  font-size: 10.5px; font-weight: 800; line-height: 1; display: grid; place-items: center;
+}
+@media (max-width: 400px) {
+  :root { --nav-dot: 52px; }
+  .bottom-nav { padding-inline: 8px; }
+  .nav-inner { padding-inline: 4px; }
+  .nav-item { font-size: 10px; }
+  .nav-item.active .nl { font-size: 9.5px; }
+}
+/* Staff get a sixth section (الإدارة): slimmer circles keep every name readable. */
+@media (max-width: 560px) {
+  .nav-many { --nav-dot: 50px; }
+  .nav-many .nav-item { font-size: 9.5px; }
+  .nav-many .nav-item .ui-icon { width: 20px; height: 20px; }
+  .nav-many .nav-item.active .ui-icon { width: 18px; height: 18px; }
+  .nav-many .nav-item.active .nl { font-size: 9px; }
+  .nav-many .nav-cta .ui-icon, .nav-many .nav-cta.active .ui-icon { width: 22px; height: 22px; }
+}
+@media (max-width: 360px) {
+  .nav-many { --nav-dot: 46px; }
+  .nav-many .nav-item { font-size: 9px; letter-spacing: -.1px; }
+  .nav-many .nav-item.active .nl { font-size: 8.5px; }
+}
 
-.toast { position: fixed; z-index: 180; inset-inline: 0; bottom: calc(var(--nav-h) + 92px + env(safe-area-inset-bottom, 0px)); display: flex; justify-content: center; pointer-events: none; padding: 0 16px; }
+.toast { position: fixed; z-index: 180; inset-inline: 0; bottom: calc(var(--nav-h) + var(--nav-bottom) + 92px); display: flex; justify-content: center; pointer-events: none; padding: 0 16px; }
 .toast .t { background: var(--toast-bg); color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 10px 18px; font-size: 13.5px; font-weight: 700; box-shadow: var(--shadow); animation: pop .25s ease; text-align: center; }
 @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.96); } }
 
@@ -699,21 +821,6 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + 104px + env(safe-ar
   box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
 }
 
-/* شريط التنقل السفلي: زر السلة الدائري البارز في النص (5 عناصر = عميل) */
-.nav-bump { padding-top: 26px; }
-.nav-bump .nav-cta { transform: translateY(-14px); padding-top: 4px; }
-.nav-bump .nav-cta .ni {
-  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--btn-bg); color: var(--btn-text);
-  box-shadow: 0 0 0 4px var(--bg-surface), var(--shadow-cta);
-  transition: transform .15s ease;
-}
-.nav-bump .nav-cta:active .ni { transform: scale(.94); }
-.nav-bump .nav-cta .ui-icon { width: 24px; height: 24px; }
-.nav-bump .nav-cta .nb { top: 0; margin-inline-start: 13px; }
-.nav-bump .nav-cta::after { display: none; }
-.nav-bump .nav-cta.active { color: var(--fire-orange); }
-
 @media (prefers-reduced-motion: reduce) {
-  .hero-slide, .hero-dot, .cat-chip-ico, .pick-card, .promo-strip, .searchbar-filters, .nav-bump .nav-cta .ni { transition: none; }
+  .hero-slide, .hero-dot, .cat-chip-ico, .pick-card, .promo-strip, .searchbar-filters, .nav-item::before { transition: none; }
 }
