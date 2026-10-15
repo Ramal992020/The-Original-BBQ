@@ -284,6 +284,51 @@ test('add-to-cart retains addons, quantities, notes and saved state', () => {
   assert.equal(ui.evaluate('cartTotals().total'), 500);
 });
 
+test('the menu shows two items per row on mobile, like the home picks grid', () => {
+  const css = source('styles.css');
+  assert.match(css, /\.menu-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); gap: 10px; \}/);
+  /* الكارت نفسه رأسي على الموبايل (صورة فوق) وبيرجع أفقي على الشاشات الكبيرة */
+  assert.match(css, /\.menu-card \{\n  display: flex; flex-direction: column;/);
+  assert.match(css, /\.card-img \{ display: block; width: 100%; aspect-ratio: 1 \/ 0\.82;/);
+  const ui = harness();
+  const html = ui.evaluate("viewsMenu(new URLSearchParams())");
+  assert.match(html, /class="menu-grid"/);
+});
+
+test('a dish with several sizes stays one card that lists its sizes', () => {
+  const ui = harness();
+  ui.evaluate(`MENU.push({ id: 'sz', cat: 'meals', name: 'أوريجينال', price: 120,
+    sizes: [{ name: 'سنجل', price: 120 }, { name: 'دابل', price: 150 }, { name: 'تربل', price: 180 }] })`);
+  const card = ui.evaluate('itemCardHTML(MENU[4])');
+  assert.deepEqual(cardIDs(card), ['sz']);                       // كارت واحد، مش كارت لكل حجم
+  assert.match(card, /class="size-chips"/);
+  assert.match(card, /سنجل/);
+  assert.match(card, /تربل/);
+  assert.match(card, /<small>من<\/small>/);                       // السعر بيبدأ «من …»
+  assert.match(card, /١٢٠/);                                      // أقل سعر بين الأحجام
+  /* الأصناف اللي ملهاش أحجام ما بتعرضش شرائح */
+  assert.doesNotMatch(ui.evaluate('itemCardHTML(MENU[0])'), /size-chips/);
+});
+
+test('the item sheet picks the size and charges its price in the cart', () => {
+  const ui = harness();
+  ui.evaluate(`MENU.push({ id: 'sz', cat: 'meals', name: 'أوريجينال', price: 120,
+    sizes: [{ name: 'سنجل', price: 120 }, { name: 'دابل', price: 150 }] })`);
+  ui.evaluate('sheet.item = MENU[4]; sheet.size = 1');
+  const html = ui.evaluate('sheetHTML()');
+  assert.match(html, /data-act="size"/);
+  assert.match(html, /دابل/);
+  assert.match(html, /أضف للسلة — ١٥٠/);                          // السعر حسب الحجم المختار
+  ui.evaluate("addToCart(MENU[4], 1, [], '', 'دابل')");
+  ui.evaluate("addToCart(MENU[4], 1, [], '', 'سنجل')");
+  assert.equal(ui.evaluate('cart.length'), 2);                    // نفس الصنف بحجمين = سطرين
+  const saved = JSON.parse(ui.saved.get('bbq_cart'));
+  assert.equal(saved[0].size, 'دابل');
+  assert.equal(saved[0].price, 150);
+  assert.equal(saved[1].price, 120);
+  assert.equal(ui.evaluate('cartTotals().subtotal'), 270);
+});
+
 test('cart discounts and delivery remain consistent after the UI redesign', () => {
   const ui = harness();
   ui.evaluate("addToCart(MENU[0], 1, [{name:'صوص',price:10}], ''); promoCode = 'BBQ10'");

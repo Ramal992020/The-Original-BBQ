@@ -174,6 +174,19 @@ function sseBroadcast(userIds, payload) {
 }
 
 /* ============================== الطلبات ============================== */
+/* الأحجام: صنف واحد بيتوفر بأكتر من حجم — الحجم المختار بيتحدد من بيانات
+   السيرفر (اسم الحجم بس بيتاخد من العميل، والسعر دايمًا من القاعدة). */
+function cleanSizes(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 10)
+    .map((s) => ({ name: String((s && s.name) || '').trim().slice(0, 60), price: Number(s && s.price) }))
+    .filter((s) => s.name && Number.isFinite(s.price) && s.price >= 0);
+}
+const sizesFor = (item) => {
+  const sizes = cleanSizes(item && item.sizes);
+  return sizes.length >= 2 ? sizes : [];
+};
+
 function computeTotals(items, promoCode) {
   const s = settings();
   const menu = store.all('menu');
@@ -184,12 +197,24 @@ function computeTotals(items, promoCode) {
   for (const raw of items) {
     if (!raw || typeof raw !== 'object') invalid('بيانات الصنف غير صالحة');
     const m = menu.find((x) => String(x.id) === String(raw.id));
-    if (!m || m.active === false || m.available === false || m.noPrice || !Number.isFinite(Number(m.price)) || Number(m.price) <= 0) {
+    if (!m || m.active === false || m.available === false || m.noPrice) {
       invalid('صنف في السلة غير متاح للطلب — راجع المنيو');
     }
     const qty = raw.qty === undefined ? 1 : Number(raw.qty);
     if (!Number.isInteger(qty) || qty < 1 || qty > 50) invalid('الكمية لازم تكون من ١ إلى ٥٠');
     if (raw.addons !== undefined && (!Array.isArray(raw.addons) || raw.addons.length > 10)) invalid('الإضافات غير صالحة');
+
+    /* الحجم: لو الصنف له أحجام، السعر بيتاخد من الحجم المختار */
+    const sizes = sizesFor(m);
+    let price, sizeName = null;
+    if (sizes.length) {
+      const chosen = sizes.find((x) => x.name === String(raw.size || '').slice(0, 60));
+      if (!chosen) invalid('اختار حجم الصنف من المنيو');
+      price = chosen.price; sizeName = chosen.name;
+    } else {
+      price = Number(m.price);
+    }
+    if (!Number.isFinite(price) || price <= 0) invalid('صنف في السلة غير متاح للطلب — راجع المنيو');
 
     /* الإضافات: بناخد الاسم من العميل وبناخد السعر من الإعدادات بتاعة السيرفر
        (كده محدش يقدر يغيّر سعر الإضافات من المتصفح) */
@@ -201,12 +226,12 @@ function computeTotals(items, promoCode) {
       const found = allowed.find((a) => a.name === name);
       if (found && !addons.some((a) => a.name === found.name)) addons.push({ name: found.name, price: Number(found.price) || 0 });
     }
-    const unit = Number(m.price || 0) + addons.reduce((x, a) => x + a.price, 0);
+    const unit = price + addons.reduce((x, a) => x + a.price, 0);
     const line_total = unit * qty;
     subtotal += line_total;
     lines.push({
       id: m.id, name: m.name, image: m.image, cat: m.cat,
-      qty, price: Number(m.price || 0), addons, note: String(raw.note || '').slice(0, 200),
+      qty, price, size: sizeName, addons, note: String(raw.note || '').slice(0, 200),
       unit_price: unit, line_total,
     });
   }
@@ -848,12 +873,15 @@ async function api(req, res, u, url) {
         spicy: !!b.spicy,
         noPrice: !!b.noPrice,
         priceLabel: String(b.priceLabel || ''),
+        sizes: cleanSizes(b.sizes),
         active: b.active !== false, available: b.available !== false,
         imageSource: b.imageSource || 'manual',
         sort: store.all('menu').length,
         updatedAt: new Date().toISOString(),
       };
       if (!item.name) return bad(400, 'اسم الصنف مطلوب');
+      /* صنف بأحجام وبدون سعر رئيسي → أقل سعر من الأحجام */
+      if (!(item.price > 0) && sizesFor(item).length) item.price = Math.min(...sizesFor(item).map((x) => x.price));
       if (!item.image) {                                   // صنف جديد بدون صورة → توليد صورة تلقائيًا
         const g = await ai.generateFoodImage(item);
         item.image = g.url; item.imageSource = g.source;
@@ -873,7 +901,11 @@ async function api(req, res, u, url) {
       for (const k of ['name', 'desc', 'cat', 'image', 'priceLabel']) if (b[k] != null) patch[k] = String(b[k]).slice(0, 400);
       for (const k of ['price', 'oldPrice', 'sort']) if (b[k] != null) patch[k] = b[k] === '' || b[k] === null ? null : Number(b[k]);
       for (const k of ['featured', 'spicy', 'noPrice', 'active', 'available']) if (b[k] != null) patch[k] = !!b[k];
+      if (b.sizes != null) patch.sizes = cleanSizes(b.sizes);
       patch.updatedAt = new Date().toISOString();
+      /* صنف بأحجام وبدون سعر فعّال → أقل سعر من الأحجام */
+      const merged = { ...item, ...patch };
+      if (!(Number(merged.price) > 0) && sizesFor(merged).length) patch.price = Math.min(...sizesFor(merged).map((x) => x.price));
       const updated = store.update('menu', id, patch);
       return send(200, { item: updated });
     }

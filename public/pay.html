@@ -105,7 +105,7 @@ async function load() {
 
 function render(order) {
   const items = (order.items || []).map((i) => `
-    <div class="kv"><span>${esc(i.name)} ×${i.qty}</span><b>${money(i.line_total || i.price * i.qty, order.currency)}</b></div>`).join('');
+    <div class="kv"><span>${esc(i.name)}${i.size ? ' — ' + esc(i.size) : ''} ×${i.qty}</span><b>${money(i.line_total || i.price * i.qty, order.currency)}</b></div>`).join('');
   const alreadyPaid = order.payment_status === 'paid';
   $('#body').innerHTML = `
     <span class="badge">🧪 صفحة دفع تجريبية (محاكاة)</span>

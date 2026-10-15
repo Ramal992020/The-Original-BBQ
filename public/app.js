@@ -232,14 +232,21 @@ function cartTotals() {
 }
 
 let promoCode = '';
-function addToCart(item, qty, addons, note) {
+function addToCart(item, qty, addons, note, size) {
   if (item.available === false) { toast('الصنف ده نفد اليوم. اختار حاجة تانية من المنيو.'); return; }
-  const key = [item.id, (addons || []).map((a) => a.name).sort().join('+'), note || ''].join('|');
+  /* الحجم جزء من مفتاح السطر — نفس الصنف بحجمين = سطرين مختلفين */
+  const sizes = itemSizes(item);
+  let sizeName = '', price = Number(item.price || 0);
+  if (sizes.length) {
+    const chosen = sizes.find((s) => s.name === String(size || '')) || sizes[0];
+    sizeName = chosen.name; price = chosen.price;
+  }
+  const key = [item.id, sizeName, (addons || []).map((a) => a.name).sort().join('+'), note || ''].join('|');
   const found = cart.find((c) => c.key === key);
   if (found) found.qty += qty;
-  else cart.push({ key, id: item.id, name: item.name, image: item.image, price: item.price || 0, qty, addons: addons || [], note: note || '' });
+  else cart.push({ key, id: item.id, name: item.name, size: sizeName, image: item.image, price, qty, addons: addons || [], note: note || '' });
   saveCart(); renderCartBar(); updateBadges();
-  toast(`تم إضافة ${item.name} للسلة ✅`);
+  toast(`تم إضافة ${item.name}${sizeName ? ` (${sizeName})` : ''} للسلة ✅`);
 }
 
 /* ============================== ٥) الراوتر ============================== */
@@ -395,15 +402,29 @@ function sectionHeaderHTML(title, link, count) {
   </div>`;
 }
 
+/* الأحجام: صنف واحد بيتوفر بأكتر من حجم (سنجل/دابل/تربل مثلًا) — يفضل كارت
+   واحد باﻷحجام بدل أصناف متكررة. الحجم الفعّال لازم يكون حجمين أو أكتر. */
+const itemSizes = (it) => {
+  const list = (Array.isArray(it?.sizes) ? it.sizes : [])
+    .filter((s) => s && s.name && Number.isFinite(Number(s.price)) && Number(s.price) >= 0)
+    .map((s) => ({ name: String(s.name).slice(0, 60), price: Number(s.price) }));
+  return list.length >= 2 ? list : [];
+};
+const itemBasePrice = (it) => {
+  const sizes = itemSizes(it);
+  return sizes.length ? Math.min(...sizes.map((s) => s.price)) : (it.price == null ? null : Number(it.price));
+};
+
 function itemCardHTML(it) {
   const unavailable = it.available === false;
+  const sizes = itemSizes(it);
   const badge = unavailable ? '<span class="tag off">نفد اليوم</span>'
     : it.spicy ? '<span class="tag badge-hot">🔥 حار</span>'
     : it.featured ? '<span class="tag hot">الأكثر طلبًا</span>'
     : it.cat === 'offers' ? '<span class="tag offer">عرض</span>' : '';
   const priceHTML = it.noPrice ? '<span class="price small">عرض خاص</span>'
-    : `<span class="price">${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}
-      ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(it.price)}</span>`;
+    : `<span class="price">${sizes.length ? '<small>من</small> ' : ''}${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}
+      ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(itemBasePrice(it))}</span>`;
   return `
   <article class="card menu-card" data-menu-id="${h(it.id)}">
     <button class="card-img" data-act="item" data-id="${h(it.id)}" aria-label="تفاصيل ${h(it.name)}">
@@ -412,6 +433,7 @@ function itemCardHTML(it) {
     <div class="card-body">
       <h3 class="card-title"><button data-act="item" data-id="${h(it.id)}">${h(it.name)}</button></h3>
       ${it.desc ? `<p class="card-desc">${h(it.desc)}</p>` : ''}
+      ${sizes.length ? `<div class="size-chips" aria-label="الأحجام المتاحة">${sizes.map((s) => `<span class="size-chip">${h(s.name)} <bdi dir="ltr"><b>${formatAmount(s.price)}</b></bdi></span>`).join('')}</div>` : ''}
       <div class="card-footer">
         ${priceHTML}
         <button class="btn-add" data-act="item" data-id="${h(it.id)}" aria-label="${it.noPrice ? 'تفاصيل عرض' : 'أضف'} ${h(it.name)}${it.noPrice ? '' : ' إلى السلة'}" ${unavailable ? 'disabled' : ''}>${icon(it.noPrice ? 'chat' : 'plus')}</button>
@@ -508,7 +530,7 @@ function pickCardHTML(it) {
       <p class="pick-desc">${h(it.desc || catName(it.cat) || '')}</p>
       <div class="pick-foot">
         ${it.noPrice ? '<span class="pick-special">عرض خاص</span>'
-          : `<span class="price">${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(it.price)}</span>`}
+          : `<span class="price">${itemSizes(it).length ? '<small>من</small> ' : ''}${it.priceLabel ? `<small>${h(it.priceLabel)}</small> ` : ''}${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span> ` : ''}${moneyHTML(itemBasePrice(it))}</span>`}
         <button class="btn-add pick-add" data-act="item" data-id="${h(it.id)}" aria-label="${it.noPrice ? 'تفاصيل عرض' : 'أضف'} ${h(it.name)}${it.noPrice ? '' : ' إلى السلة'}" ${unavailable ? 'disabled' : ''}>${icon(it.noPrice ? 'chat' : 'plus')}</button>
       </div>
     </div>
@@ -603,8 +625,8 @@ function viewsMenu(q) {
   let list = MENU.slice();
   if (activeCat) list = list.filter((i) => i.cat === activeCat);
   if (search) list = list.filter((i) => normalizeSearch(i.name + ' ' + (i.desc || '')).includes(normalizeSearch(search)));
-  if (sort === 'cheap') list.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
-  if (sort === 'pricey') list.sort((a, b) => (b.price ?? -1) - (a.price ?? -1));
+  if (sort === 'cheap') list.sort((a, b) => (itemBasePrice(a) ?? 1e9) - (itemBasePrice(b) ?? 1e9));
+  if (sort === 'pricey') list.sort((a, b) => (itemBasePrice(b) ?? -1) - (itemBasePrice(a) ?? -1));
   if (sort === 'hot') list.sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0));
 
   const groupHTML = (title, items, id) => `<section class="menu-section" ${id ? `id="section-${h(id)}"` : ''}>
@@ -665,13 +687,13 @@ function viewsMenu(q) {
 }
 
 /* ============================== ٩) شيت الصنف ============================== */
-let sheet = { item: null, addons: [], qty: 1, note: '' };
+let sheet = { item: null, addons: [], qty: 1, note: '', size: 0 };
 let sheetReturnFocus = null;
 
 function openSheet(id) {
   const it = byId(id); if (!it) return;
   sheetReturnFocus = document.activeElement;
-  sheet = { item: it, addons: [], qty: 1, note: '' };
+  sheet = { item: it, addons: [], qty: 1, note: '', size: 0 };
   let bd = $('#sheet');
   if (!bd) { bd = document.createElement('div'); bd.id = 'sheet'; bd.className = 'sheet-backdrop'; document.body.appendChild(bd); }
   bd.innerHTML = sheetHTML(); bd.classList.add('show'); bd.inert = false; bd.setAttribute('aria-hidden', 'false');
@@ -690,8 +712,11 @@ function closeSheet() {
 function sheetHTML() {
   const it = sheet.item;
   const list = (S.addons && (S.addons[it.cat] || S.addons.default)) || [];
+  const sizes = itemSizes(it);
+  const size = sizes.length ? sizes[Math.min(Math.max(0, sheet.size | 0), sizes.length - 1)] : null;
   const extras = sheet.addons.reduce((s, a) => s + a.price, 0);
-  const total = ((it.price || 0) + extras) * sheet.qty;
+  const unit = (size ? size.price : (it.price || 0)) + extras;
+  const total = unit * sheet.qty;
   return `
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <div class="hero-img">
@@ -703,8 +728,8 @@ function sheetHTML() {
       ${it.priceLabel ? `<div class="small muted">${h(it.priceLabel)}</div>` : ''}
       ${it.desc ? `<p class="muted small">${h(it.desc)}</p>` : ''}
       <div class="row" style="margin:8px 0 14px">
-        ${it.oldPrice ? `<span class="old-price">${money(it.oldPrice)}</span>` : ''}
-        <span class="price" style="font-size:19px">${it.price == null ? 'عرض خاص' : money(it.price)}</span>
+        ${it.oldPrice && !size ? `<span class="old-price">${money(it.oldPrice)}</span>` : ''}
+        <span class="price" style="font-size:19px">${it.price == null && !size ? 'عرض خاص' : money(size ? size.price : it.price)}</span>
       </div>
       ${it.noPrice ? `
         <p class="small muted">العرض ده بيتجهّز على واتساب — ابعتلنا وهنأكدلك التفاصيل.</p>
@@ -712,6 +737,16 @@ function sheetHTML() {
           <a class="btn btn-primary btn-block" target="_blank" rel="noopener"
              href="https://wa.me/${h(S.whatsapp)}?text=${encodeURIComponent('مرحبًا ' + S.name + ' 👋\nعايز أطلب: ' + it.name + '\n' + (it.desc || ''))}">💬 اطلب العرض على واتساب</a>
         </div>` : `
+        ${sizes.length ? `
+          <div style="margin-bottom:14px">
+            <strong>الحجم</strong>
+            <div style="margin-top:8px">
+              ${sizes.map((s, i) => `
+                <button class="opt ${size && size.name === s.name ? 'on' : ''}" data-act="size" data-i="${i}" aria-pressed="${size && size.name === s.name}">
+                  <span><span class="tick" aria-hidden="true">✓</span> ${h(s.name)}</span><span class="muted small">${money(s.price)}</span>
+                </button>`).join('')}
+            </div>
+          </div>` : ''}
         ${list.length ? `
           <div style="margin-bottom:14px">
             <strong>إضافات اختيارية</strong>
@@ -728,7 +763,7 @@ function sheetHTML() {
         </div>
         <div class="row" style="justify-content:space-between">
           <span class="qty"><button data-act="sheet-minus" aria-label="تقليل الكمية">−</button><span class="n">${formatAmount(sheet.qty)}</span><button data-act="sheet-plus" aria-label="زيادة الكمية">+</button></span>
-          <span class="small muted">سعر الوحدة ${money((it.price || 0) + extras)}</span>
+          <span class="small muted">سعر الوحدة ${money(unit)}</span>
         </div>
         <div class="sheet-foot">
           <button class="btn btn-primary btn-block" data-act="sheet-add" ${it.available === false ? 'disabled' : ''}>${it.available === false ? 'نفد اليوم' : 'أضف للسلة — ' + money(total)}</button>
@@ -769,6 +804,7 @@ function viewsCart() {
             <div style="flex:1;min-width:0">
               <div class="row" style="justify-content:space-between"><strong>${h(c.name)}</strong>
                 <button class="muted" data-act="rm" data-key="${h(c.key)}" aria-label="حذف ${h(c.name)} من السلة">✕</button></div>
+              ${c.size ? `<div class="small muted">الحجم: ${h(c.size)}</div>` : ''}
               ${c.addons && c.addons.length ? `<div class="small muted">إضافات: ${h(c.addons.map((a) => a.name).join('، '))}</div>` : ''}
               <div class="row" style="justify-content:space-between;margin-top:10px">
                 <span class="qty"><button data-act="minus" data-key="${h(c.key)}" aria-label="تقليل كمية ${h(c.name)}">−</button><span class="n">${formatAmount(c.qty)}</span><button data-act="plus" data-key="${h(c.key)}" aria-label="زيادة كمية ${h(c.name)}">+</button></span>
@@ -987,6 +1023,7 @@ function viewOrderPage(id) {
       <strong>تفاصيل الطلب (Order Items)</strong>
       ${o.items.map((i) => `
         <div class="line"><span>${h(i.name)} ×${i.qty}
+          ${i.size ? `<div class="small muted">الحجم: ${h(i.size)}</div>` : ''}
           ${i.addons && i.addons.length ? `<div class="small muted">${h(i.addons.map((a) => a.name).join('، '))}</div>` : ''}
           ${i.note ? `<div class="small muted">📝 ${h(i.note)}</div>` : ''}</span>
           <span>${money(i.line_total || (i.price + (i.addons || []).reduce((a, x) => a + x.price, 0)) * i.qty)}</span></div>`).join('')}
@@ -1264,6 +1301,14 @@ function adminCustomersHTML() {
   </div>`;
 }
 
+/* صف حجم واحد في فورم إدارة الصنف (اسم + سعر) */
+const sizeRowHTML = (s) => `
+  <div class="row" data-size-row style="margin-top:6px;gap:6px">
+    <input data-size-name placeholder="اسم الحجم (مثال: دابل)" value="${h(s && s.name || '')}" style="flex:2;min-width:0">
+    <input data-size-price type="number" min="0" step="1" placeholder="السعر" value="${s && s.price != null ? h(s.price) : ''}" style="flex:1;min-width:0">
+    <button type="button" class="btn btn-sm btn-danger" data-act="size-row-del" aria-label="حذف الحجم">✕</button>
+  </div>`;
+
 function adminMenuHTML() {
   const e = AD.editing;
   const lib = S.imageLibrary || [];
@@ -1292,6 +1337,11 @@ function adminMenuHTML() {
         <div><label class="lbl">السعر القديم (اختياري)</label><input name="oldPrice" type="number" step="1" min="0" value="${e.oldPrice || ''}"></div>
         <div><label class="lbl">وصف مختصر</label><input name="desc" value="${h(e.desc || '')}"></div>
         <div><label class="lbl">نص مكان السعر (اختياري)</label><input name="priceLabel" value="${h(e.priceLabel || '')}" placeholder="إضافة"></div>
+      </div>
+      <div style="margin-top:10px">
+        <label class="lbl">الأحجام (اختياري) — لو الصنف بيتوفر بأكتر من حجم، يفضل كارت واحد باﻷحجام بدل أصناف متكررة</label>
+        <div id="sizeRows">${(Array.isArray(e.sizes) ? e.sizes : []).map((s) => sizeRowHTML(s)).join('')}</div>
+        <button type="button" class="btn btn-sm btn-ghost" data-act="size-row-add" style="margin-top:6px">＋ إضافة حجم</button>
       </div>
       <div class="btn-row" style="margin-top:10px">
         <label class="opt" style="width:auto;margin:0"><span><input type="checkbox" name="featured" ${e.featured ? 'checked' : ''}> الأكثر طلبًا</span><span></span></label>
@@ -1328,7 +1378,7 @@ function adminMenuHTML() {
             ${m.active === false ? `<span class="role-chip off-chip">موقوف</span>` : ''}
             ${m.imageSource && m.imageSource !== 'upload' ? `<span class="role-chip">صورة: ${h({ ai: 'AI', pool: 'مكتبة', placeholder: 'بديلة' }[m.imageSource] || m.imageSource)}</span>` : ''}
           </div>
-          <div class="small muted" style="margin-top:3px">${h(catName(m.cat))} · ${m.noPrice ? 'عرض خاص' : money(m.price)}${m.oldPrice ? ` (قبل ${money(m.oldPrice)})` : ''}</div>
+          <div class="small muted" style="margin-top:3px">${h(catName(m.cat))} · ${m.noPrice ? 'عرض خاص' : itemSizes(m).length ? `من ${money(itemBasePrice(m))} — ${h(itemSizes(m).map((s) => s.name).join(' / '))}` : money(m.price)}${m.oldPrice ? ` (قبل ${money(m.oldPrice)})` : ''}</div>
         </div>
         <div class="btn-row" style="justify-content:flex-end">
           <button class="btn btn-sm btn-ghost" data-act="menu-edit" data-id="${h(m.id)}">تعديل</button>
@@ -1715,6 +1765,7 @@ function openOrderDrawer(id) {
       <div class="box" style="margin-top:12px">
         <strong>المنتجات (Order Items)</strong>
         ${o.items.map((i) => `<div class="line"><span>${h(i.name)} ×${i.qty}
+          ${i.size ? `<div class="small muted">الحجم: ${h(i.size)}</div>` : ''}
           ${i.addons && i.addons.length ? `<div class="small muted">${h(i.addons.map((a) => a.name).join('، '))}</div>` : ''}
           ${i.note ? `<div class="small muted">📝 ${h(i.note)}</div>` : ''}</span>
           <span>${money(i.line_total || i.price * i.qty)}</span></div>`).join('')}
@@ -2101,9 +2152,17 @@ function bindPage(r) {
     mf.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(mf);
+      const sizes = $$('#sizeRows [data-size-row]').map((row) => ({
+        name: ($('[data-size-name]', row)?.value || '').trim().slice(0, 60),
+        price: $('[data-size-price]', row)?.value,
+      })).filter((s) => s.name && s.price !== '' && Number.isFinite(Number(s.price)) && Number(s.price) >= 0)
+        .map((s) => ({ name: s.name, price: Number(s.price) }));
+      let price = fd.get('price') === '' ? null : Number(fd.get('price'));
+      /* صنف بأحجام وبدون سعر رئيسي → أقل سعر من الأحجام */
+      if (price == null && sizes.length >= 2) price = Math.min(...sizes.map((s) => s.price));
       const body = {
         name: fd.get('name'), cat: fd.get('cat'), desc: fd.get('desc'),
-        price: fd.get('price') === '' ? null : Number(fd.get('price')),
+        price, sizes,
         oldPrice: fd.get('oldPrice') === '' ? null : Number(fd.get('oldPrice')),
         priceLabel: fd.get('priceLabel'),
         featured: fd.get('featured') != null, spicy: fd.get('spicy') != null, available: fd.get('available') != null,
@@ -2309,7 +2368,7 @@ async function submitOrder(e) {
      (مفعّل افتراضيًا) بدل ما نرسل «موقوف» من غير ما العميل اختار حاجة. */
   const waBox = form.querySelector('input[name="notifyWhatsapp"]');
   const body = {
-    items: cart.map((c) => ({ id: c.id, qty: c.qty, addons: c.addons, note: c.note })),
+    items: cart.map((c) => ({ id: c.id, qty: c.qty, addons: c.addons, note: c.note, size: c.size || undefined })),
     customer, payment: fd.get('payment'), promoCode: promoCode || undefined,
     notifyWhatsapp: waBox ? fd.get('notifyWhatsapp') != null : (ME.notifyWhatsapp !== false),
   };
@@ -2366,6 +2425,13 @@ document.addEventListener('click', async (e) => {
     }
     case 'item': openSheet(id); break;
     case 'sheet-close': closeSheet(); break;
+    case 'size': {
+      const i = Number(el.getAttribute('data-i'));
+      if (itemSizes(sheet.item)[i]) { sheet.size = i; refreshSheet(); }
+      break;
+    }
+    case 'size-row-add': $('#sizeRows')?.insertAdjacentHTML('beforeend', sizeRowHTML()); break;
+    case 'size-row-del': el.closest('[data-size-row]')?.remove(); break;
     case 'addon': {
       const list = (S.addons && (S.addons[sheet.item.cat] || S.addons.default)) || [];
       const a = list[Number(el.getAttribute('data-i'))];
@@ -2378,7 +2444,8 @@ document.addEventListener('click', async (e) => {
     case 'sheet-minus': sheet.qty = Math.max(1, sheet.qty - 1); refreshSheet(); break;
     case 'sheet-add': {
       const n = $('#sheetNote');
-      addToCart(sheet.item, sheet.qty, sheet.addons.slice(), n ? n.value : '');
+      const sizeName = (itemSizes(sheet.item)[sheet.size | 0] || {}).name || '';
+      addToCart(sheet.item, sheet.qty, sheet.addons.slice(), n ? n.value : '', sizeName);
       closeSheet();
       break;
     }

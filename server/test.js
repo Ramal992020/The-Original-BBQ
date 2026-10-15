@@ -66,7 +66,8 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('السيرفر شغال', r.status === 200 && r.data.ok);
 
   r = await req('GET', '/api/bootstrap');
-  check('البيانات الأولية بتوصل', r.status === 200 && r.data.menu.length === 50, 'منيو=' + (r.data.menu || []).length);
+  const seededMenuCount = (r.data.menu || []).length;
+  check('البيانات الأولية بتوصل', r.status === 200 && seededMenuCount >= 40, 'منيو=' + seededMenuCount);
   check('التصنيفات ٨', r.data.categories.length === 8);
   check('الحالات ٦ (طلب جديد → ملغي)', r.data.settings.statuses.length === 6);
   check('كل صنف مستورد له صورة', r.data.menu.every((m) => !!m.image));
@@ -213,11 +214,48 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('حالة غير معروفة مرفوضة', badStatus.status === 400);
 
   /* إلغاء طلب من العميل */
-  const o2 = (await req('POST', '/api/orders', { token: newTok, body: { items: [{ id: 's2', qty: 1 }], customer: { name: 'عميل ٢', phone: '01111111111', address: 'شارع طوويل شوية' }, payment: 'cash' } })).data.order;
+  const o2 = (await req('POST', '/api/orders', { token: newTok, body: { items: [{ id: 'k2', qty: 1 }], customer: { name: 'عميل ٢', phone: '01111111111', address: 'شارع طوويل شوية' }, payment: 'cash' } })).data.order;
   const cancel = await req('POST', '/api/orders/' + o2.id + '/cancel', { token: newTok });
   check('العميل يقدر يلغي طلبه (وطلبه بس)', cancel.status === 200 && cancel.data.order.status === 'cancelled');
   const cancelOther = await req('POST', '/api/orders/' + o2.id + '/cancel', { token: cust.token });
   check('عميل تاني لا يقدر يلغي طلب غيره', cancelOther.status === 403);
+
+  /* ---------------------------- 6ب) الأحجام ---------------------------- */
+  console.log('\n【 الأحجام 】');
+  const sized = (await req('GET', '/api/bootstrap')).data.menu.find((m) => m.id === 's1');
+  check('الصنف بأحجام واحد بس في المنيو ومعه كل الأحجام بأسعارها',
+    !!sized && sized.name === 'أوريجينال' && Array.isArray(sized.sizes) && sized.sizes.length === 3 &&
+    sized.sizes.map((x) => x.name).join('/') === 'سنجل/دابل/تربل' && sized.price === Math.min(...sized.sizes.map((x) => x.price)),
+    JSON.stringify(sized && { name: sized.name, sizes: sized.sizes, price: sized.price }));
+
+  const sizeBody = (item) => ({ items: [item], customer: { name: 'عميل أحجام', phone: '01012345678', address: 'شارع 9 عمارة 5' }, payment: 'cash' });
+  const noSize = await req('POST', '/api/orders', { token: cust.token, body: sizeBody({ id: 's1', qty: 1 }) });
+  check('صنف بأحجام من غير تحديد الحجم = 400', noSize.status === 400, JSON.stringify(noSize.data).slice(0, 120));
+  const badSize = await req('POST', '/api/orders', { token: cust.token, body: sizeBody({ id: 's1', qty: 1, size: 'جامبو' }) });
+  check('حجم مش موجود في الصنف = 400', badSize.status === 400);
+  const sizedOrder = await req('POST', '/api/orders', { token: cust.token, body: sizeBody({ id: 's1', qty: 2, size: 'دابل', price: 1 }) });
+  check('سعر الحجم المختار من السيرفر (مش من العميل)',
+    sizedOrder.status === 201 && sizedOrder.data.order.items[0].size === 'دابل' &&
+    sizedOrder.data.order.items[0].price === 150 && sizedOrder.data.order.subtotal === 300,
+    JSON.stringify(sizedOrder.data.order ? { size: sizedOrder.data.order.items[0].size, price: sizedOrder.data.order.items[0].price, subtotal: sizedOrder.data.order.subtotal } : sizedOrder.data).slice(0, 160));
+
+  const sizedCreated = await req('POST', '/api/admin/menu', {
+    token: admin.token,
+    body: { name: 'صنف تجريبي بأحجام', cat: 'meals', desc: 'للاختبار', price: '', sizes: [{ name: 'وسط', price: 50 }, { name: 'كبير', price: 70, hack: 'x' }] },
+  });
+  check('الأدمن يضيف صنف بأحجام والسعر الرئيسي = أقل حجم',
+    sizedCreated.status === 201 && sizedCreated.data.item.sizes.length === 2 && sizedCreated.data.item.price === 50,
+    JSON.stringify(sizedCreated.data.item || {}).slice(0, 160));
+  const sizedPatched = await req('PATCH', '/api/admin/menu/' + sizedCreated.data.item.id, {
+    token: admin.token,
+    body: { sizes: [{ name: 'وسط', price: 55 }, { name: 'كبير', price: 75 }] },
+  });
+  check('الأدمن يعدّل أحجام الصنف',
+    sizedPatched.status === 200 && sizedPatched.data.item.sizes[0].price === 55 && sizedPatched.data.item.sizes[1].name === 'كبير',
+    JSON.stringify(sizedPatched.data.item && sizedPatched.data.item.sizes));
+  const sizedOffer = await req('POST', '/api/orders', { token: cust.token, body: sizeBody({ id: sizedCreated.data.item.id, qty: 1, size: 'كبير' }) });
+  check('سعر الحجم المعدّل هو اللي بيتحسب', sizedOffer.status === 201 && sizedOffer.data.order.items[0].price === 75, 'total=' + (sizedOffer.data.order && sizedOffer.data.order.total));
+  await req('DELETE', '/api/admin/menu/' + sizedCreated.data.item.id, { token: admin.token });
 
   /* ---------------------------- 7) لوحة الإدارة ---------------------------- */
   console.log('\n【 لوحة الإدارة 】');
@@ -256,7 +294,7 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('توليد صورة بالذكاء الاصطناعي لصنف', genOne.status === 200 && !!genOne.data.item.image);
 
   const genAll = await req('POST', '/api/admin/menu/generate-images', { token: admin.token, body: { only: 'all' } });
-  check('توليد جماعي للأصناف المستوردة', genAll.status === 200 && genAll.data.generated >= 50, 'generated=' + genAll.data.generated);
+  check('توليد جماعي للأصناف المستوردة', genAll.status === 200 && genAll.data.generated >= 40, 'generated=' + genAll.data.generated);
 
   /* رفع صورة يدويًا (multipart) */
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
@@ -282,7 +320,7 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   const del = await req('DELETE', '/api/admin/menu/' + newId, { token: admin.token });
   const afterDel = (await req('GET', '/api/bootstrap')).data.menu.length;
-  check('الأدمن يحذف صنف', del.status === 200 && afterDel === 50);
+  check('الأدمن يحذف صنف', del.status === 200 && afterDel === seededMenuCount);
 
   /* ---------------------------- 9) إدارة المستخدمين ---------------------------- */
   console.log('\n【 إدارة المستخدمين 】');
@@ -432,7 +470,7 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   /* طلب بدفع أونلاين */
   const onlineOrderRes = await req('POST', '/api/orders', {
     token: payCust.token,
-    body: { items: [{ id: 'c1', qty: 1 }, { id: 'f6', qty: 1 }], customer: { name: 'عميل دفع', phone: '01144445555', area: 'مصر الجديدة', address: 'شارع الحجاز 22 برج A' }, payment: 'online' },
+    body: { items: [{ id: 'c1', qty: 1, size: 'سنجل' }, { id: 'f6', qty: 1 }], customer: { name: 'عميل دفع', phone: '01144445555', area: 'مصر الجديدة', address: 'شارع الحجاز 22 برج A' }, payment: 'online' },
   });
   check('طلب أونلاين: رجع رابط دفع + required', onlineOrderRes.status === 201 && onlineOrderRes.data.payment.required === true && !!onlineOrderRes.data.payment.url, JSON.stringify(onlineOrderRes.data.payment || {}));
   const oOnline = onlineOrderRes.data.order;

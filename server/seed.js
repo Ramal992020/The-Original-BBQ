@@ -79,10 +79,9 @@ const MENU = [
   { id: 'r11', cat: 'rolls', name: 'هوت دوج كلاسيك', price: 70, image: AI('ai-rolls.jpg'),
     desc: 'كاتشب، مايونيز، خيار مخلل' },
 
-  { id: 'c1', cat: 'charcoal', name: 'برجر فحم دابل', price: 200, featured: true, image: AI('ai-charcoal.jpg'),
-    desc: '300 جرام برجر لحم، خص، خيار مخلل، طماطم، موتزاريلا، ميكس صوصات مع البطاطس' },
-  { id: 'c2', cat: 'charcoal', name: 'برجر فحم سنجل', price: 150, image: AI('ai-charcoal.jpg'),
-    desc: '150 جرام برجر لحم، خص، خيار مخلل، طماطم، موتزاريلا، ميكس صوصات مع البطاطس' },
+  { id: 'c1', cat: 'charcoal', name: 'برجر فحم', price: 150, featured: true, image: AI('ai-charcoal.jpg'),
+    sizes: [{ name: 'سنجل', price: 150 }, { name: 'دابل', price: 200 }],
+    desc: 'برجر لحم على الفحم (سنجل 150 جرام / دابل 300 جرام)، خص، خيار مخلل، طماطم، موتزاريلا، ميكس صوصات مع البطاطس' },
 
   { id: 'k1', cat: 'chicken', name: 'برجر ميكس', price: 200, image: AI('ai-chicken.jpg'),
     desc: 'قطعة بيف برجر مشوية على الفحم مع قطعة صدور فراخ، خص، خيار مخلل، موتزاريلا، ميكس صوصات، بطاطس' },
@@ -97,29 +96,17 @@ const MENU = [
   { id: 'k6', cat: 'chicken', name: 'مايتي زنجر', price: 200, featured: true, image: AI('ai-chicken.jpg'),
     desc: 'قطعتين صدور فرش، خص، صوص بيج تيستي، طماطم، خيار مخلل، كاتشب، جبنة، موتزاريلا، بطاطس' },
 
-  { id: 's1', cat: 'smash', name: 'أوريجينال تربل', price: 180, image: AI('ai-smash.jpg'),
+  { id: 's1', cat: 'smash', name: 'أوريجينال', price: 120, featured: true, image: AI('ai-smash.jpg'),
+    sizes: [{ name: 'سنجل', price: 120 }, { name: 'دابل', price: 150 }, { name: 'تربل', price: 180 }],
     desc: 'سماش برجر، خص، بيج تيستي، بصل مكرمل، موتزاريلا، خيار مخلل، بريكيو، جبنة، بطاطس' },
-  { id: 's2', cat: 'smash', name: 'أوريجينال دابل', price: 150, featured: true, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، خص، بيج تيستي، بصل مكرمل، موتزاريلا، خيار مخلل، بريكيو، جبنة، بطاطس' },
-  { id: 's3', cat: 'smash', name: 'أوريجينال سنجل', price: 120, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، خص، بيج تيستي، بصل مكرمل، موتزاريلا، خيار مخلل، بريكيو، جبنة، بطاطس' },
-  { id: 's4', cat: 'smash', name: 'إيطاليانو تربل', price: 200, image: AI('ai-smash.jpg'),
+  { id: 's4', cat: 'smash', name: 'إيطاليانو', price: 140, image: AI('ai-smash.jpg'),
+    sizes: [{ name: 'سنجل', price: 140 }, { name: 'دابل', price: 170 }, { name: 'تربل', price: 200 }],
     desc: 'سماش برجر، خلطة إيطالي، خص، بيج تيستي، بريكيو، بصل مكرمل، موتزاريلا، خيار مخلل، جبنة، بطاطس' },
-  { id: 's5', cat: 'smash', name: 'إيطاليانو دابل', price: 170, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، خلطة إيطالي، خص، بيج تيستي، بريكيو، بصل مكرمل، موتزاريلا، خيار مخلل، جبنة، بطاطس' },
-  { id: 's6', cat: 'smash', name: 'إيطاليانو سنجل', price: 140, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، خلطة إيطالي، خص، بيج تيستي، بريكيو، بصل مكرمل، موتزاريلا، خيار مخلل، جبنة، بطاطس' },
-  { id: 's7', cat: 'smash', name: 'سوبريم تربل', price: 200, image: AI('ai-smash.jpg'),
+  { id: 's7', cat: 'smash', name: 'سوبريم', price: 140, image: AI('ai-smash.jpg'),
+    sizes: [{ name: 'سنجل', price: 140 }, { name: 'دابل', price: 170 }, { name: 'تربل', price: 200 }],
     desc: 'سماش برجر، بيف بيكون، خص، خيار مخلل، بصل مكرمل، موتزاريلا، مجموعة من الصوصات المميزة' },
-  { id: 's8', cat: 'smash', name: 'سوبريم دابل', price: 170, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، بيف بيكون، خص، خيار مخلل، بصل مكرمل، موتزاريلا، مجموعة من الصوصات المميزة' },
-  { id: 's9', cat: 'smash', name: 'سوبريم سنجل', price: 140, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، بيف بيكون، خص، خيار مخلل، بصل مكرمل، موتزاريلا، مجموعة من الصوصات المميزة' },
-  { id: 's10', cat: 'smash', name: 'مشروم تربل', price: 200, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، مشروم كريمي، بصل مكرمل، موتزاريلا، خص، بيج تيستي، خيار مخلل، بريكيو، جبنة، بطاطس' },
-  { id: 's11', cat: 'smash', name: 'مشروم دابل', price: 170, featured: true, image: AI('ai-smash.jpg'),
-    desc: 'سماش برجر، مشروم كريمي، بصل مكرمل، موتزاريلا، خص، بيج تيستي، خيار مخلل، بريكيو، جبنة، بطاطس' },
-  { id: 's12', cat: 'smash', name: 'مشروم سنجل', price: 140, image: AI('ai-smash.jpg'),
+  { id: 's10', cat: 'smash', name: 'مشروم', price: 140, featured: true, image: AI('ai-smash.jpg'),
+    sizes: [{ name: 'سنجل', price: 140 }, { name: 'دابل', price: 170 }, { name: 'تربل', price: 200 }],
     desc: 'سماش برجر، مشروم كريمي، بصل مكرمل، موتزاريلا، خص، بيج تيستي، خيار مخلل، بريكيو، جبنة، بطاطس' },
 
   { id: 'p1', cat: 'rollpotato', name: 'بطاطس توابل', price: 45, image: AI('ai-potatoroll.jpg'), desc: 'رول بطاطس بتوابل البيت' },
@@ -210,6 +197,49 @@ const SETTINGS = {
   aiAutoImages: true,          // توليد صور تلقائيًا للأصناف المستوردة بدون صورة
 };
 
+/* ----------------------------------------------------------------------------
+   ترقية: نفس الصنف كان مسجّل كأصناف متكررة بأحجام (سنجل/دابل/تربل) — بنحوّله
+   لصنف واحد باﻷحجام. الدمج بيحصل بس لما كل الأصناف تكون لسه موجودة بأسمائها
+   الأصلية بالحرف (يعني مفيش تعديل يدوي)، والأسعار بتتاخد من الصفوف الحالية
+   نفسها فبتفضل زي ما الأدمن ظبطها.
+   -------------------------------------------------------------------------- */
+const SIZE_FAMILIES = [
+  { base: 'برجر فحم', keep: 'c1', desc: 'برجر لحم على الفحم (سنجل 150 جرام / دابل 300 جرام)، خص، خيار مخلل، طماطم، موتزاريلا، ميكس صوصات مع البطاطس',
+    members: [{ id: 'c2', size: 'سنجل' }, { id: 'c1', size: 'دابل' }] },
+  { base: 'أوريجينال', keep: 's1', desc: 'سماش برجر، خص، بيج تيستي، بصل مكرمل، موتزاريلا، خيار مخلل، بريكيو، جبنة، بطاطس',
+    members: [{ id: 's3', size: 'سنجل' }, { id: 's2', size: 'دابل' }, { id: 's1', size: 'تربل' }] },
+  { base: 'إيطاليانو', keep: 's4', desc: 'سماش برجر، خلطة إيطالي، خص، بيج تيستي، بريكيو، بصل مكرمل، موتزاريلا، خيار مخلل، جبنة، بطاطس',
+    members: [{ id: 's6', size: 'سنجل' }, { id: 's5', size: 'دابل' }, { id: 's4', size: 'تربل' }] },
+  { base: 'سوبريم', keep: 's7', desc: 'سماش برجر، بيف بيكون، خص، خيار مخلل، بصل مكرمل، موتزاريلا، مجموعة من الصوصات المميزة',
+    members: [{ id: 's9', size: 'سنجل' }, { id: 's8', size: 'دابل' }, { id: 's7', size: 'تربل' }] },
+  { base: 'مشروم', keep: 's10', desc: 'سماش برجر، مشروم كريمي، بصل مكرمل، موتزاريلا، خص، بيج تيستي، خيار مخلل، بريكيو، جبنة، بطاطس',
+    members: [{ id: 's12', size: 'سنجل' }, { id: 's11', size: 'دابل' }, { id: 's10', size: 'تربل' }] },
+];
+
+function mergeSizeFamilies() {
+  let merged = 0;
+  for (const family of SIZE_FAMILIES) {
+    const rows = family.members.map((member) => store.find('menu', (x) => x.id === member.id));
+    /* الدمج بيتم بس لو كل الأصناف القديمة لسه موجودة بأسمائها الأصلية */
+    if (rows.some((row, i) => !row || row.name !== `${family.base} ${family.members[i].size}`)) continue;
+    const keeper = rows.find((row) => row.id === family.keep);
+    if (!keeper) continue;
+    const sizes = rows.map((row, i) => ({ name: family.members[i].size, price: Number(row.price) || 0 }));
+    for (const row of rows) if (row.id !== keeper.id) store.remove('menu', row.id);
+    store.update('menu', keeper.id, {
+      name: family.base,
+      desc: family.desc,
+      price: Math.min(...sizes.map((s) => s.price)),
+      sizes,
+      featured: rows.some((row) => row.featured),
+      updatedAt: new Date().toISOString(),
+    });
+    merged++;
+  }
+  if (merged) console.log(`🧩 تم دمج ${merged} أصناف بأحجام مختلفة في صنف واحد باﻷحجام`);
+  return merged;
+}
+
 function seed() {
   let created = false;
   /* ترقية أي بيانات قديمة: ضيف حقول الدفع/الواتساب لو مش موجودة */
@@ -265,6 +295,9 @@ function seed() {
     created = true;
     console.log(`🍔 تم استيراد ${MENU.length} صنف مع صور مولّدة تلقائيًا`);
   }
+
+  /* ترقية قواعد البيانات القديمة: دمج الأصناف المتكررة بأحجام في صنف واحد */
+  mergeSizeFamilies();
 
   if (!store.all('settings_pending').length || !store.find('settings', (s) => s.id === 'main')) {
     const exists = store.find('settings', (s) => s.id === 'main');
