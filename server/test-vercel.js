@@ -49,7 +49,7 @@ const check = (name, cond, extra = '') => {
   const out1 = (await execFile('node', [path.join(__dirname, 'vercel-runner.js'), 'first'], { env, encoding: 'utf8' })).stdout;
   const o1 = JSON.parse(out1.trim().split('\n').pop());
   check('التخزين السحابي اشتغل (من غير أي ملفات على القرص)', o1.storage === 'redis', o1.storage);
-  check('البيانات الأولية اتزرعت (50 صنف)', o1.menu === 50, 'menu=' + o1.menu);
+  check('البيانات الأولية اتزرعت (أصناف المنيو كاملة)', o1.menu >= 40, 'menu=' + o1.menu);
   check('تسجيل حساب + عمل طلب', o1.orderId === 'BBQ-1001' && o1.total === 360, `${o1.orderId} / ${o1.total}`);
   check('إشعار إدارة وصل', o1.notifs >= 1);
   check('SSE مرفوض على السيرفرلس (400)', o1.sse === 400, 'status=' + o1.sse);

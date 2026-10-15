@@ -409,31 +409,37 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + var(--nav-bottom) +
 .grid.wide { grid-template-columns: 1fr; }
 @media (min-width: 640px) { .grid.wide { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; text-align: start; }
-.menu-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-@media (min-width: 720px) { .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* المنيو على الموبايل: كروت رأسية جنب بعضها (عمودين) زي كروت «الأكثر طلبًا» —
+   والشاشات الكبيرة بترجّع الكارت الأفقي القديم. */
+.menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 720px) { .menu-grid { gap: 12px; } }
 .menu-card {
-  display: flex; flex-direction: row; min-height: 144px; border-left: 3px solid var(--fire-dark);
+  display: flex; flex-direction: column;
   box-shadow: var(--shadow); transition: background-color .2s, transform .15s;
 }
-.menu-card:nth-child(3n+1) { border-left-color: var(--fire-red); }
-.menu-card:nth-child(3n+2) { border-left-color: var(--fire-orange); }
-.menu-card:nth-child(3n+3) { border-left-color: var(--fire-yellow); }
-.card-img { width: 116px; min-height: 100px; flex: none; position: relative; padding: 0; overflow: hidden; background: var(--bg-surface); }
+.card-img { display: block; width: 100%; aspect-ratio: 1 / 0.82; flex: none; position: relative; padding: 0; overflow: hidden; background: var(--bg-surface); }
 .card-img img { width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; filter: saturate(.94) contrast(1.03); }
 .card-img .tag { position: absolute; top: 6px; left: 6px; padding: 3px 6px; border-radius: 3px; background: var(--fire-dark); color: #FFF200; font-size: 9px; font-weight: 700; transform: rotate(-2deg); white-space: nowrap; }
 .card-img .badge-hot { background: #B70000; color: #FFF200; } /* Logo red, deep enough for the small yellow label. */
 .card-img .tag.offer { background: #9D0F14; }
 .card-img .tag.off { background: #1A1410; color: #F5EDE0; }
-.card-body { flex: 1; min-width: 0; padding: 12px; display: flex; flex-direction: column; }
-.card-title { margin: 0 0 4px; font-size: 16px; line-height: 1.7; }
+.card-body { flex: 1; min-width: 0; padding: 10px 11px 12px; display: flex; flex-direction: column; }
+.card-title { margin: 0 0 3px; font-size: 13.5px; line-height: 1.6; }
 .card-title button { padding: 0; text-align: start; font: inherit; }
-.card-desc { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-desc { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.size-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.size-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 10px; font-weight: 700; color: var(--muted); white-space: nowrap;
+}
+.size-chip b { color: var(--text); font-weight: 800; }
 .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; margin-top: auto; }
-.card-footer .price { font-size: 18px; }
+.card-footer .price { font-size: 15px; }
 .card-footer .old-price { display: block; font-family: var(--font); font-size: 11px; line-height: 1.2; }
 .price-amount { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .card-footer .price > small { display: block; line-height: 1.2; }
-.btn-add { width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--btn-bg); color: var(--btn-text); display: grid; place-items: center; box-shadow: 0 2px 8px rgba(157, 15, 20, .4); transition: transform .15s; }
+.btn-add { width: 32px; height: 32px; flex: none; border-radius: 10px; background: var(--btn-bg); color: var(--btn-text); display: grid; place-items: center; box-shadow: 0 2px 8px rgba(157, 15, 20, .4); transition: transform .15s; }
 .btn-add:active { transform: scale(.9); }
 .btn-add:disabled { opacity: .45; box-shadow: none; }
 [data-theme='night'] .menu-card, [data-theme='light'] .menu-card { border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,.04); }
@@ -448,12 +454,29 @@ body.cart-visible .app { padding-bottom: calc(var(--nav-h) + var(--nav-bottom) +
   .menu-card:hover { transform: translateY(-2px); }
   .btn-add:hover { background: var(--fire-dark); color: #FFF200; }
 }
+/* الشاشات الكبيرة: الكارت الأفقي القديم (صورة 116px + حافة يسار ملونة) */
+@media (min-width: 720px) {
+  .menu-card {
+    flex-direction: row; min-height: 144px; border-left: 3px solid var(--fire-dark);
+  }
+  .menu-card:nth-child(3n+1) { border-left-color: var(--fire-red); }
+  .menu-card:nth-child(3n+2) { border-left-color: var(--fire-orange); }
+  .menu-card:nth-child(3n+3) { border-left-color: var(--fire-yellow); }
+  .card-img { width: 116px; min-height: 100px; aspect-ratio: auto; }
+  .card-body { padding: 12px; }
+  .card-title { font-size: 16px; }
+  .card-desc { font-size: 12.5px; }
+  .card-footer .price { font-size: 18px; }
+  .btn-add { width: 36px; height: 36px; }
+}
 @media (max-width: 440px) {
-  .card-img { width: 100px; }
-  .menu-card { min-height: 144px; }
-  .card-title { font-size: 14px; }
-  .card-desc { font-size: 12px; }
-  .card-footer .price { font-size: 17px; }
+  .menu-grid { gap: 8px; }
+  .card-body { padding: 9px 10px 11px; }
+  .card-title { font-size: 12.5px; }
+  .card-desc { font-size: 10.5px; }
+  .card-footer .price { font-size: 14px; }
+  .card-footer .price > small { font-size: 10px; }
+  .btn-add { width: 30px; height: 30px; }
 }
 .perks { display: grid; gap: 12px; }
 @media (min-width: 560px) { .perks { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

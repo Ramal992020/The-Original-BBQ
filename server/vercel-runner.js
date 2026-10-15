@@ -72,7 +72,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
       Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="image"; filename="t.png"\r\nContent-Type: image/png\r\n\r\n`),
       png, Buffer.from(`\r\n--${b}--\r\n`),
     ]);
-    const up = await J('POST', '/api/admin/menu/s2/image', {
+    const up = await J('POST', '/api/admin/menu/s1/image', {
       token: admin.token, raw: payload, headers: { 'content-type': 'multipart/form-data; boundary=' + b },
     });
     out.image = up.d.item.image;
@@ -89,7 +89,7 @@ const J = async (method, url, { token, body, raw, headers = {} } = {}) => {
     out.notifs = (await J('GET', '/api/notifications', { token: admin.token })).d.notifications.length;
     out.waLog = (await J('GET', '/api/admin/whatsapp/log', { token: admin.token })).d.log.length;
     const boot = await J('GET', '/api/bootstrap');
-    out.image = boot.d.menu.find((m) => m.id === 's2').image;
+    out.image = boot.d.menu.find((m) => m.id === 's1').image;
     const img = await fetch(BASE + out.image);
     out.imgStatus = img.status;
     out.sales = (await J('GET', '/api/admin/stats', { token: admin.token })).d.today.sales;
