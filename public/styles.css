@@ -847,3 +847,182 @@ body:has(.nav-many) { --nav-maxw: 560px; } /* Separate rule: lets the floating c
 @media (prefers-reduced-motion: reduce) {
   .hero-slide, .hero-dot, .cat-chip-ico, .pick-card, .promo-strip, .searchbar-filters, .nav-item::before { transition: none; }
 }
+
+/* ================================ شاشة الترحيب (قبل الدخول) ================================
+   The welcome mock-up, kept in its own fixed palette (it does not follow day/night):
+   black top, the #C3C3C3 arch with the doodle texture, the grill, LOGIN and Register!.
+   Every size is in the mock-up's own units — its frame is 228 × 498 — so the art, the arch and
+   the real buttons stay locked together on every screen. --u = one design unit in CSS pixels,
+   chosen so the content band (y −133 … 303, 436 units) always fits inside the safe area. */
+.sr-only {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+body.is-gated { overflow: hidden; background: #000; }
+body.is-gated::before { display: none; }
+body.is-gated .toast { top: calc(env(safe-area-inset-top, 0px) + 14px); bottom: auto; z-index: 240; }
+body.is-gated .toast .t { background: #111; color: #FDFDFD; border-color: #2B2B2B; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+body.is-gated #cartBar { display: none; }
+
+.welcome-gate {
+  --vh: 100vh;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --u: min(calc(100vw / 228), calc((var(--vh) - var(--safe-t) - var(--safe-b)) / 436));
+  --mid: calc(var(--safe-t) + (var(--vh) - var(--safe-t) - var(--safe-b)) / 2);
+  position: fixed; inset: 0; z-index: 5; overflow: hidden;
+  background: #000; color: #FDFDFD;
+  -webkit-tap-highlight-color: transparent;
+}
+@supports (height: 100dvh) { .welcome-gate { --vh: 100dvh; } }
+
+/* The 228 × 498 frame. Design point (x, y) sits at ((x + 438.2)u, (y + 174)u); y = 85 is the
+   middle of the content band and lands on the middle of the safe area — except when that would
+   leave the frame's bottom edge above the bottom of the screen (narrow tall phones): then the
+   frame anchors to the bottom instead, so the planet and its doodles run off the real edge and
+   no seam ever shows. The black cap above the band makes the extra top space invisible. */
+.welcome-stage {
+  position: absolute; left: 50%;
+  top: max(calc(var(--mid) - 259 * var(--u)), calc(var(--vh) - 498 * var(--u)));
+  width: calc(228 * var(--u)); height: calc(498 * var(--u)); margin-left: calc(-114 * var(--u));
+}
+/* The arch and its doodles live inside the owner's artwork; this plain #C3C3C3 band sits behind it
+   as sub-pixel insurance, so rounding can never flash a seam under the frame's bottom edge. */
+.welcome-planet {
+  position: absolute; left: 0; right: 0; top: calc(318 * var(--u));
+  height: var(--vh); background: #C3C3C3;
+}
+.welcome-art {
+  position: absolute; inset: 0; width: 100%; height: 100%; max-width: none;
+  pointer-events: none; user-select: none; -webkit-user-select: none;
+}
+
+/* The artwork itself draws the LOGIN plate (−381.4, 235, 114.5 × 33.6, r 7.8) with its red
+   #F60205 tab and lock, and the black "Register!" with the red exclamation mark. These two real
+   links sit exactly on top of those drawn shapes as transparent overlays: keyboard focus, hit
+   areas and accessible names stay real, the pixels stay the owner's. A faint tint on hover/active
+   is the only feedback, so the art never gets covered. */
+.welcome-login {
+  position: absolute; left: calc(56.8 * var(--u)); top: calc(409 * var(--u));
+  width: calc(114.5 * var(--u)); height: calc(33.6 * var(--u)); border-radius: calc(7.8 * var(--u));
+  transition: background-color .18s ease;
+}
+/* Register! — the hit area is taller than the drawn glyphs (89.3…138.7 × 448.3…457.4). */
+.welcome-register {
+  position: absolute; left: calc(77 * var(--u)); top: calc(444.5 * var(--u));
+  width: calc(74 * var(--u)); height: calc(25 * var(--u)); border-radius: calc(6 * var(--u));
+  transition: background-color .18s ease;
+}
+.welcome-login:focus-visible, .welcome-register:focus-visible {
+  outline: max(2px, calc(1.2 * var(--u))) solid #F60205; outline-offset: max(2px, calc(1.5 * var(--u)));
+}
+@media (hover: hover) {
+  .welcome-login:hover { background: rgba(253, 253, 253, .12); }
+  .welcome-register:hover { background: rgba(1, 1, 1, .07); }
+}
+.welcome-login:active { background: rgba(1, 1, 1, .14); }
+.welcome-register:active { background: rgba(1, 1, 1, .1); }
+
+.welcome-gate.is-intro .welcome-art { animation: welcome-in .7s ease backwards; }
+@keyframes welcome-in { from { opacity: 0; transform: scale(.985); } }
+
+/* ---- The login / sign-up sheet over the welcome art (fixed light palette, like the mock-up) ---- */
+.auth-layer {
+  position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
+}
+.auth-backdrop {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  animation: auth-fade .25s ease backwards;
+}
+.auth-sheet {
+  position: relative; width: 100%; max-width: 480px;
+  max-height: calc(var(--vh) - var(--safe-t) - 10px); overflow-y: auto; overscroll-behavior: contain;
+  background: #FFFFFF; color: #111111; color-scheme: light;
+  border-radius: 26px 26px 0 0; padding: 8px 20px calc(20px + var(--safe-b));
+  box-shadow: 0 -16px 44px rgba(0, 0, 0, .38);
+  animation: auth-rise .34s cubic-bezier(.2, .8, .2, 1) backwards;
+  outline: none;
+}
+.auth-layer.is-static .auth-backdrop, .auth-layer.is-static .auth-sheet { animation: none; }
+.auth-layer.is-leaving { pointer-events: none; }
+.auth-layer.is-leaving .auth-backdrop { animation: auth-fade-out .22s ease forwards; }
+.auth-layer.is-leaving .auth-sheet { animation: auth-sink .22s ease-in forwards; }
+@keyframes auth-fade { from { opacity: 0; } }
+@keyframes auth-fade-out { to { opacity: 0; } }
+@keyframes auth-rise { from { transform: translateY(100%); } }
+@keyframes auth-sink { to { transform: translateY(100%); } }
+.auth-grip { display: block; width: 42px; height: 5px; border-radius: 99px; background: #DCDCDC; margin: 2px auto 12px; }
+.auth-close {
+  position: absolute; top: 12px; inset-inline-end: 12px; width: 38px; height: 38px; border-radius: 50%;
+  display: grid; place-items: center; background: #F2F2F2; color: #111111;
+}
+.auth-close svg { width: 20px; height: 20px; }
+.auth-tabs {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 4px 46px 16px 46px;
+  background: #F2F2F2; border-radius: 999px;
+}
+.auth-tabs a {
+  display: block; text-align: center; padding: 8px 6px; border-radius: 999px;
+  font-family: var(--font-heading); font-weight: 800; font-size: 13.5px; color: #5A5A5A;
+  transition: background-color .18s ease, color .18s ease;
+}
+.auth-tabs a.on { background: #010101; color: #FDFDFD; }
+.auth-sheet h2 { margin: 0; font-size: 23px; line-height: 1.35; color: #0B0B0B; }
+.auth-sub { margin: 4px 0 16px; color: #626262; font-size: 13.5px; line-height: 1.7; }
+.auth-form { display: grid; gap: 12px; }
+.auth-field { display: grid; gap: 6px; }
+.auth-sheet label.lbl { margin: 0; color: #3F3F3F; font-size: 13px; font-weight: 700; }
+.auth-optional { color: #8A8A8A; font-weight: 500; }
+.auth-sheet input:not([type="hidden"]) {
+  height: 50px; padding: 0 14px; border-radius: 14px; font-size: 16px; /* 16px: no iOS zoom on focus */
+  background: #F4F4F4; border: 1.5px solid #E2E2E2; color: #111111;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+.auth-sheet input[dir="ltr"] { text-align: left; }
+.auth-sheet input::placeholder { color: #9B9B9B; }
+.auth-sheet input:focus { outline: none; background: #FFFFFF; border-color: #F60205; box-shadow: 0 0 0 3px rgba(246, 2, 5, .14); }
+.auth-sheet .form-error { margin: 0; padding: 10px 12px; border-radius: 12px; background: #FFF1F1; border: 1px solid #FFD2D2; color: #B80003; font-size: 13px; }
+.auth-sheet .form-error a { color: #B80003 !important; text-decoration: underline; }
+/* Same language as the LOGIN plate: black, with the red tab (on the start side in Arabic). */
+.auth-submit {
+  position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 54px;
+  margin-top: 4px; padding: 0 64px; border-radius: 14px; background: #010101; color: #FDFDFD;
+  font-family: var(--font-heading); font-weight: 800; font-size: 16.5px;
+  box-shadow: 0 8px 18px -8px rgba(0, 0, 0, .55);
+  transition: transform .15s ease, background-color .15s ease;
+}
+.auth-submit-tab {
+  position: absolute; top: 0; inset-inline-start: 14px; width: 38px; height: 37px;
+  display: grid; place-items: end center; padding-bottom: 6px;
+  border-radius: 0 0 19px 19px; background: #F60205; color: #010101;
+}
+.auth-submit-tab svg { width: 20px; height: 20px; display: block; }
+.auth-submit:active { transform: scale(.98); }
+.auth-submit:disabled { opacity: .7; cursor: progress; }
+@media (hover: hover) { .auth-submit:hover { background: #1C1C1C; } }
+.auth-sheet a:focus-visible, .auth-sheet button:focus-visible { outline: 2.5px solid #F60205; outline-offset: 3px; }
+.auth-links { margin: 2px 0 0; text-align: center; color: #626262; font-size: 13.5px; }
+.auth-links a, .auth-sub a { color: #C80004; font-weight: 800; }
+.auth-demo {
+  width: 100%; padding: 11px 12px; border-radius: 14px; border: 1.5px dashed #D4D4D4;
+  color: #333333; font-weight: 700; font-size: 13.5px; background: #FAFAFA;
+}
+/* Short phones (SE, landscape): tighter rhythm so sign-up fits without scrolling where possible. */
+@media (max-height: 700px) {
+  .auth-sheet { padding-top: 6px; }
+  .auth-grip { margin-bottom: 8px; }
+  .auth-tabs { margin-bottom: 10px; }
+  .auth-sub { margin-bottom: 10px; }
+  .auth-form { gap: 9px; }
+  .auth-sheet input:not([type="hidden"]) { height: 46px; }
+  .auth-submit { height: 50px; }
+}
+/* Larger screens: a centred card instead of a bottom sheet. */
+@media (min-width: 640px) and (min-height: 560px) {
+  .auth-layer { align-items: center; padding: 24px; }
+  .auth-sheet { max-width: 430px; border-radius: 26px; padding: 22px 26px 26px; box-shadow: 0 24px 70px rgba(0, 0, 0, .5); }
+  .auth-grip { display: none; }
+  @keyframes auth-rise { from { opacity: 0; transform: translateY(18px) scale(.98); } }
+  @keyframes auth-sink { to { opacity: 0; transform: translateY(12px) scale(.98); } }
+}

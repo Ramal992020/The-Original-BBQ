@@ -370,7 +370,8 @@ function footerHTML() {
 function renderCartBar() {
   let bar = $('#cartBar');
   const { name } = parseHash();
-  const hide = !cart.length || ['cart', 'checkout', 'login', 'signup', 'admin'].includes(name);
+  const hide = !cart.length || document.body.classList.contains('is-gated')
+    || ['cart', 'checkout', 'login', 'signup', 'forgot', 'reset', 'welcome', 'admin'].includes(name);
   document.body.classList.toggle('cart-visible', !hide);
   if (!bar) {
     bar = document.createElement('button');
@@ -1048,43 +1049,180 @@ function viewOrderPage(id) {
   </div>${footerHTML()}</main>`;
 }
 
-/* ============================== ١٢) الحساب ============================== */
-function authPageHTML(kind, q) {
-  const ret = q.get('return') || '';
-  const back = ret ? `<input type="hidden" name="return" value="${h(ret)}">` : '';
-  const isLogin = kind === 'login';
-  const isReset = kind === 'reset';
-  const token = q.get('token') || '';
-  return `
-  ${headerHTML('account')}<main class="app"><div class="wrap" style="max-width:460px">
-    <div class="page-head"><h1>${isLogin ? 'تسجيل الدخول' : isReset ? 'كلمة سر جديدة' : 'إنشاء حساب'}</h1>
-      <p>${isLogin ? 'ادخل على حسابك عشان تتابع طلباتك' : isReset ? 'اكتب كلمة السر الجديدة' : 'حسابك وطلباتك محفوظين عند المطعم، وتقدر تدخل من أي جهاز'}</p></div>
-    <form id="${isLogin ? 'loginForm' : isReset ? 'resetForm' : 'signupForm'}" class="box" style="margin-top:14px">
-      ${back}${isReset ? `<input type="hidden" name="token" value="${h(token)}">` : ''}
-      ${isLogin || isReset ? '' : `
-        <div style="margin-bottom:10px"><label class="lbl" for="signupName">الاسم</label><input id="signupName" name="name" autocomplete="name" required minlength="2" maxlength="120" placeholder="اسمك"></div>
-        <div style="margin-bottom:10px"><label class="lbl" for="signupPhone">رقم الهاتف</label><input id="signupPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="01xxxxxxxxx"></div>`}
-      ${isReset ? '' : `<div style="margin-bottom:10px"><label class="lbl" for="authEmail">الإيميل</label><input id="authEmail" name="email" type="email" autocomplete="email" dir="ltr" required maxlength="254" placeholder="you@example.com"></div>`}
-      <div style="margin-bottom:14px"><label class="lbl" for="authPassword">كلمة السر${isLogin ? '' : ' (٦ أحرف على الأقل)'}</label>
-        <input id="authPassword" name="password" type="password" autocomplete="${isLogin ? 'current-password' : 'new-password'}" required minlength="6" maxlength="128" placeholder="••••••"></div>
-      <p class="form-error small" data-form-error role="alert" hidden></p>
-      <button class="btn btn-primary btn-block" type="submit">${isLogin ? 'دخول' : isReset ? 'حفظ كلمة السر' : 'إنشاء الحساب'}</button>
-      <div class="center small muted" style="margin-top:12px">
-        ${isLogin
-          ? `مش عندك حساب؟ <a href="#/signup${ret ? '?return=' + h(ret) : ''}" style="color:var(--link)">أنشئ حساب</a>
-             · <a href="#/forgot" style="color:var(--link)">نسيت كلمة السر؟</a>`
-          : isReset ? `<a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a>`
-          : `عندك حساب؟ <a href="#/login${ret ? '?return=' + h(ret) : ''}" style="color:var(--link)">سجّل الدخول</a>`}
-      </div>
-      ${isLogin && S.demoLogin === true ? `<div class="center" style="margin-top:14px">
-        <button type="button" class="btn btn-sm btn-ghost" data-act="demo">دخول سريع بحساب تجريبي (عميل)</button>
-      </div>` : ''}
-    </form>
-  </div>${footerHTML()}</main>`;
+/* ============================== ١٢) شاشة الترحيب: الدخول وإنشاء الحساب ==============================
+   أول حاجة بتظهر قبل التطبيق: تصميم «Welcome to The Original BBQ Menu» بألوانه الثابتة (أسود فوق،
+   قوس رمادي عليه رسومات الأكل، الشواية في النص) وعليه زرار LOGIN وRegister!.
+   الفورمات بتفتح فوق التصميم كشيت من تحت. مفيش تصفح من غير حساب: أي صفحة بتتفتح وانت مش
+   مسجّل بتعرض الشاشة دي، وبعد الدخول بترجع للصفحة اللي كنت طالبها (return).
+   الرسمة في public/img/welcome-art.svg — التصدير الأصلي اللي جايبه المالك (فيها الدودلز وزرار LOGIN
+   وRegister! مرسومين جوّاها) ومقاساتها بوحدات التصميم نفسه (إطار ٢٢٨×٤٩٨) — الروابط الحقيقية overlays
+   شفافة فوق الرسمة بالظبط، شوف styles.css. */
+const WELCOME_ART = '/img/welcome-art.svg?v=0ae3168c40f3';
+const AUTH_SHEETS = ['login', 'signup', 'forgot', 'reset'];
+const GATE_ROUTES = ['welcome', ...AUTH_SHEETS];
+let gateWasOpen = false;      // آخر رسم كان شاشة الترحيب؟ (أنيميشن الدخول أول مرة بس)
+let gateSheetWasOpen = '';    // الشيت اللي كان مفتوح في آخر رسم ('' = مفيش)
+let sheetFromGate = false;    // الشيت اتفتح من زرار في الشاشة نفسها؟ → القفل = رجوع خطوة
+
+/* الضيف بيشوف التصميم لحد ما الملف يتحمّل في الخلفية أثناء شاشة التحميل */
+if (!api.token && typeof Image === 'function') { const img = new Image(); img.decoding = 'async'; img.src = WELCOME_ART; }
+
+/* null = التطبيق العادي، '' = شاشة الترحيب لوحدها، غير كده = الشاشة + الشيت ده */
+function gateSheet(r) {
+  if (r.name === 'setup') return null;          // دليل إصلاح الاستضافة لازم يفضل متاح
+  if (r.name === 'reset') return 'reset';       // رابط الاستعادة من الإيميل
+  if (ME) return null;
+  return AUTH_SHEETS.includes(r.name) ? r.name : '';
+}
+/* صفحة الرجوع بعد الدخول: مسار داخلي بس، ومش صفحة دخول تانية (عشان مفيش لف في دواير) */
+function safeReturn(value) {
+  const route = String(value || '').replace(/^[#/]+/, '').trim().slice(0, 300);
+  const name = route.split(/[/?#]/)[0];
+  return !/^[a-z][a-z-]*$/.test(name) || name === 'home' || name === 'setup' || GATE_ROUTES.includes(name) ? '' : route;
+}
+const gateReturn = (r) => safeReturn(GATE_ROUTES.includes(r.name) ? r.q.get('return') : location.hash);
+const withReturn = (route, ret) => route + (ret ? '?return=' + encodeURIComponent(ret) : '');
+/* تنقّل من غير ما يزوّد خطوة في تاريخ المتصفح (التبديل بين الفورمات، والدخول بعد النجاح) */
+function replaceRoute(p) {
+  const target = '#/' + String(p || '').replace(/^#?\/?/, '');
+  if (location.hash === target) return softRender();
+  if (typeof location.replace === 'function') location.replace(target); else location.hash = target;
+}
+function enterApp(target) {
+  sheetFromGate = false;
+  replaceRoute(safeReturn(target));
 }
 
+const GATE_ICONS = {
+  lock: '<path fill="currentColor" d="M7 10V7.6a5 5 0 0 1 10 0V10h.5c.9 0 1.5.6 1.5 1.5v8c0 .9-.6 1.5-1.5 1.5h-11c-.9 0-1.5-.6-1.5-1.5v-8c0-.9.6-1.5 1.5-1.5H7Zm2.3 0h5.4V7.6a2.7 2.7 0 0 0-5.4 0V10Zm2.7 3.4a1.6 1.6 0 0 0-.8 3v1.6h1.6v-1.6a1.6 1.6 0 0 0-.8-3Z"/>',
+  userPlus: '<path fill="currentColor" d="M10 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 1.8c-4.4 0-7.5 2.3-7.5 5.2 0 1.1.8 2 2 2h11c1.2 0 2-.9 2-2 0-2.9-3.1-5.2-7.5-5.2ZM19 7.5a1 1 0 0 1 1 1V10h1.5a1 1 0 1 1 0 2H20v1.5a1 1 0 1 1-2 0V12h-1.5a1 1 0 1 1 0-2H18V8.5a1 1 0 0 1 1-1Z"/>',
+  mail: '<path fill="currentColor" d="M4.5 5h15c1.1 0 2 .9 2 2v10c0 1.1-.9 2-2 2h-15a2 2 0 0 1-2-2V7c0-1.1.9-2 2-2Zm.4 2.2v.3l7.1 5 7.1-5v-.3H4.9Zm14.2 2.6-6.5 4.6a1 1 0 0 1-1.2 0L4.9 9.8v7h14.2v-7Z"/>',
+  key: '<path fill="currentColor" d="M14.5 3a6.5 6.5 0 0 1 0 13c-.9 0-1.7-.2-2.5-.5L10.6 17H9v2H7v2H3v-3.6l5.5-5.5c-.3-.8-.5-1.6-.5-2.4A6.5 6.5 0 0 1 14.5 3Zm1.5 3.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>',
+  close: '<path d="M6.5 6.5l11 11m0-11-11 11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+};
+const gateIcon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${GATE_ICONS[name]}</svg>`;
+
+function welcomeHTML(sheet, r) {
+  const ret = gateReturn(r);
+  return `
+  <main class="welcome-gate${gateWasOpen ? '' : ' is-intro'}${sheet ? ' has-sheet' : ''}" id="welcomeGate" data-ret="${h(ret)}">
+    <h1 class="sr-only">أهلًا بيك في ${h(S.name || 'The Original BBQ')} — سجّل دخولك أو أنشئ حساب عشان تبدأ تطلب</h1>
+    <div class="welcome-stage"${sheet ? ' inert' : ''}>
+      <div class="welcome-planet" aria-hidden="true"></div>
+      <img class="welcome-art" src="${WELCOME_ART}" width="228" height="498" alt="Welcome to The Original BBQ — Premium Quality — Menu" lang="en" draggable="false">
+      <a class="welcome-login" href="#/${withReturn('login', ret)}" data-gate-open>
+        <span class="sr-only" lang="en" dir="ltr">LOGIN</span><span class="sr-only"> — تسجيل الدخول</span>
+      </a>
+      <a class="welcome-register" href="#/${withReturn('signup', ret)}" data-gate-open>
+        <span class="sr-only" lang="en" dir="ltr">Register!</span><span class="sr-only"> — إنشاء حساب جديد</span>
+      </a>
+    </div>
+    ${sheet ? authPageHTML(sheet, sheet === 'reset' ? r.q : new URLSearchParams(withReturn('', ret).slice(1))) : ''}
+  </main>`;
+}
+
+/* فورمة الدخول/التسجيل/الاستعادة — نفس الحقول والـIDs القديمة، جوّه شيت فوق شاشة الترحيب */
+function authPageHTML(kind, q) {
+  const ret = safeReturn(q.get('return'));
+  const isLogin = kind === 'login', isSignup = kind === 'signup', isForgot = kind === 'forgot', isReset = kind === 'reset';
+  const close = '#/' + (isReset ? '' : ret);
+  const [name, title, sub, action, badge, busy] = {
+    login: ['تسجيل الدخول', 'أهلًا بيك تاني', 'ادخل بإيميلك وكلمة السر وكمّل طلبك.', 'دخول', 'lock', 'جاري الدخول…'],
+    signup: ['إنشاء حساب جديد', 'اعمل حسابك في ثواني', 'حسابك وطلباتك محفوظين عند المطعم، وتقدر تدخل من أي جهاز.', 'إنشاء الحساب', 'userPlus', 'جاري إنشاء الحساب…'],
+    forgot: ['استعادة كلمة السر', 'نسيت كلمة السر؟', 'اكتب إيميلك وهنبعتلك رابط تعيّن بيه كلمة سر جديدة.', 'ابعت الرابط', 'mail', 'جاري الإرسال…'],
+    reset: ['تعيين كلمة سر جديدة', 'كلمة سر جديدة', 'اكتب كلمة السر الجديدة لحسابك، وبعدها سجّل الدخول بيها.', 'حفظ كلمة السر', 'key', 'جاري الحفظ…'],
+  }[kind] || [];
+  const formId = { login: 'loginForm', signup: 'signupForm', forgot: 'forgotForm', reset: 'resetForm' }[kind];
+  const back = ret ? `<input type="hidden" name="return" value="${h(ret)}">` : '';
+  const link = (route, label) => `<a href="#/${withReturn(route, ret)}" data-replace>${label}</a>`;
+  return `
+  <div class="auth-layer${gateSheetWasOpen ? ' is-static' : ''}">
+    <a class="auth-backdrop" href="${h(close)}" data-act="auth-close" tabindex="-1" aria-hidden="true"></a>
+    <section class="auth-sheet" id="authSheet" role="dialog" aria-modal="true" aria-label="${name}" aria-describedby="authDesc" data-close="${h(close)}" tabindex="-1">
+      <span class="auth-grip" aria-hidden="true"></span>
+      <a class="auth-close" href="${h(close)}" data-act="auth-close" aria-label="إغلاق والرجوع لشاشة الترحيب">${gateIcon('close')}</a>
+      ${isLogin || isSignup ? `<nav class="auth-tabs" aria-label="الدخول أو حساب جديد">
+        <a href="#/${withReturn('login', ret)}" data-replace${isLogin ? ' class="on" aria-current="page"' : ''}>تسجيل الدخول</a>
+        <a href="#/${withReturn('signup', ret)}" data-replace${isSignup ? ' class="on" aria-current="page"' : ''}>حساب جديد</a>
+      </nav>` : ''}
+      <h2>${title}</h2>
+      <p class="auth-sub" id="authDesc">${sub}</p>
+      <form id="${formId}" class="auth-form">
+        ${back}${isReset ? `<input type="hidden" name="token" value="${h(q.get('token') || '')}">` : ''}
+        ${isSignup ? `
+        <div class="auth-field"><label class="lbl" for="signupName">الاسم</label><input id="signupName" name="name" autocomplete="name" required minlength="2" maxlength="120" placeholder="اسمك"></div>
+        <div class="auth-field"><label class="lbl" for="signupPhone">رقم الهاتف <span class="auth-optional">(اختياري)</span></label><input id="signupPhone" name="phone" type="tel" autocomplete="tel" inputmode="tel" dir="ltr" maxlength="30" placeholder="01xxxxxxxxx"></div>` : ''}
+        ${isReset ? '' : `<div class="auth-field"><label class="lbl" for="authEmail">الإيميل</label><input id="authEmail" name="email" type="email" autocomplete="email" dir="ltr" required maxlength="254" placeholder="you@example.com"></div>`}
+        ${isForgot ? '' : `<div class="auth-field"><label class="lbl" for="authPassword">كلمة السر${isLogin ? '' : ' (٦ أحرف على الأقل)'}</label>
+          <input id="authPassword" name="password" type="password" autocomplete="${isLogin ? 'current-password' : 'new-password'}" dir="ltr" required minlength="6" maxlength="128" placeholder="••••••"></div>`}
+        <p class="form-error small" data-form-error role="alert" hidden></p>
+        <button class="auth-submit" type="submit" data-busy-label="${busy}">
+          <span class="auth-submit-tab" aria-hidden="true">${gateIcon(badge)}</span><span data-label>${action}</span>
+        </button>
+        <p class="auth-links">
+          ${isLogin ? link('forgot', 'نسيت كلمة السر؟')
+            : isSignup ? `عندك حساب؟ ${link('login', 'سجّل الدخول')}`
+            : link('login', 'رجوع لتسجيل الدخول')}
+        </p>
+        ${isLogin && S.demoLogin === true ? `<button type="button" class="auth-demo" data-act="demo">دخول سريع بحساب تجريبي (عميل)</button>` : ''}
+      </form>
+    </section>
+  </div>`;
+}
+
+/* بيرسم الشاشة، ولو هي مرسومة بالفعل بيبدّل الشيت بس (من غير ما الرسمة ترمش أو الأنيميشن يتعاد) */
+function mountGate(sheet, r) {
+  const gate = $('#welcomeGate');
+  if (!gate || !gate.isConnected || gate.getAttribute('data-ret') !== gateReturn(r)) {
+    $('#view').innerHTML = welcomeHTML(sheet, r);
+    return;
+  }
+  const stage = $('.welcome-stage', gate);
+  const old = $('.auth-layer:not(.is-leaving)', gate);
+  gate.classList.toggle('has-sheet', !!sheet);
+  if (stage) stage.inert = !!sheet;
+  if (sheet) {
+    const ret = gateReturn(r);
+    const html = authPageHTML(sheet, sheet === 'reset' ? r.q : new URLSearchParams(withReturn('', ret).slice(1)));
+    if (old) old.outerHTML = html; else gate.insertAdjacentHTML('beforeend', html);
+  } else if (old) {
+    old.classList.add('is-leaving'); old.inert = true;
+    $('#authSheet', old)?.removeAttribute('id');
+    const instant = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    setTimeout(() => old.remove(), instant ? 0 : 240);
+  }
+}
+function closeAuthSheet() {
+  const dialog = $('#authSheet');
+  if (!dialog) return;
+  if (sheetFromGate && history.length > 1) { sheetFromGate = false; history.back(); }
+  else replaceRoute(dialog.getAttribute('data-close') || '#/');
+}
+/* فتح الشيت: أول خانة (على الكمبيوتر) أو الشيت نفسه (على الموبايل، عشان الكيبورد ما يطلعش فجأة).
+   قفله: التركيز يرجع للزرار اللي فتحه. */
+function focusGate(sheet, previous) {
+  const run = () => {
+    if (sheet) {
+      const fine = !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches);
+      const target = (fine && $('#authSheet input:not([type="hidden"])')) || $('#authSheet');
+      target?.focus({ preventScroll: true });
+    } else if (previous) {
+      $(previous === 'signup' ? '.welcome-register' : '.welcome-login')?.focus({ preventScroll: true });
+    }
+  };
+  typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : run();
+}
+/* شريط المتصفح بلون الجزء الأسود من التصميم طول ما الشاشة ظاهرة */
+function syncGateChrome(on) {
+  document.body.classList.toggle('is-gated', on);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', on ? '#000000' : (getTheme() === 'night' ? '#FDF9F3' : '#0D0A08'));
+}
+window.addEventListener('bbq:theme', () => { if (document.body.classList.contains('is-gated')) syncGateChrome(true); });
+
+/* ============================== ١٢٫٥) الحساب ============================== */
 function viewsAccount() {
-  if (!ME) return authPageHTML('login', new URLSearchParams(''));
+  if (!ME) return welcomeHTML('login', parseHash());
   const staff = isStaff();
   return `
   ${headerHTML('account')}<main class="app"><div class="wrap">
@@ -1963,6 +2101,24 @@ async function render(opts = {}) {
   const r = parseHash();
   const view = $('#view');
 
+  /* مسجّل بالفعل وفتح رابط دخول/ترحيب؟ يدخل على طول (من غير خطوة زيادة في التاريخ) */
+  if (ME && ['welcome', 'login', 'signup', 'forgot'].includes(r.name)) return enterApp(r.q.get('return'));
+
+  /* شاشة الترحيب قبل التطبيق: من غير هيدر ولا شريط تنقل ولا سلة */
+  const gate = gateSheet(r);
+  syncGateChrome(gate !== null);
+  if (gate !== null) {
+    const previous = gateWasOpen ? gateSheetWasOpen : '';
+    if (!gate) sheetFromGate = false;
+    mountGate(gate, r);
+    gateWasOpen = true; gateSheetWasOpen = gate;
+    if (!opts.soft || opts.scroll) window.scrollTo({ top: 0 });
+    renderCartBar(); bindPage(r);
+    if (gate !== previous) focusGate(gate, previous);
+    return;
+  }
+  gateWasOpen = false; gateSheetWasOpen = '';
+
   /* تحميل البيانات المطلوبة للصفحة */
   if (r.name === 'my-orders' || r.name === 'order' || r.name === 'account') await loadMyOrders();
 
@@ -1995,17 +2151,6 @@ async function render(opts = {}) {
   else if (r.name === 'my-orders') html = viewsOrders();
   else if (r.name === 'order') html = viewOrderPage(r.param);
   else if (r.name === 'account') html = viewsAccount();
-  else if (r.name === 'login') html = authPageHTML('login', r.q);
-  else if (r.name === 'signup') html = authPageHTML('signup', r.q);
-  else if (r.name === 'forgot') html = `
-    ${headerHTML('account')}<main class="app"><div class="wrap" style="max-width:460px">
-      <div class="page-head"><h1>نسيت كلمة السر؟</h1><p>هنبعتلك رابط لإعادة التعيين</p></div>
-      <form id="forgotForm" class="box" style="margin-top:14px">
-        <label class="lbl">الإيميل</label><input name="email" type="email" required placeholder="you@example.com">
-        <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">ابعت الرابط</button>
-        <div class="center small muted" style="margin-top:10px"><a href="#/login" style="color:var(--link)">رجوع لتسجيل الدخول</a></div>
-      </form></div>${footerHTML()}</main>`;
-  else if (r.name === 'reset') html = authPageHTML('reset', r.q);
   else if (r.name === 'setup') html = setupPageHTML();
   else if (r.name === 'admin') html = viewsAdmin(r.q);
   else html = `<main class="app"><div class="wrap"><div class="empty" style="padding-top:60px">
@@ -2085,7 +2230,7 @@ function bindPage(r) {
       acceptLogin(d);
       toast(`أهلًا ${ME.name || ME.email} 👋`);
       await loadNotifs(); startRealtime();
-      go(fd.get('return') || (isStaff() ? 'admin' : 'account'));
+      enterApp(fd.get('return') || (isStaff() ? 'admin' : ''));
     });
   });
 
@@ -2096,7 +2241,7 @@ function bindPage(r) {
     await submitAccountForm(sf, async () => {
       const d = await api.req('/api/auth/signup', { method: 'POST', body: { name: fd.get('name'), email: fd.get('email'), password: fd.get('password'), phone: fd.get('phone') } });
       acceptLogin(d); toast('تم إنشاء حسابك وحفظه عند المطعم 🎉');
-      startRealtime(); go(fd.get('return') || 'account');
+      startRealtime(); enterApp(fd.get('return'));
     });
   });
 
@@ -2116,21 +2261,22 @@ function bindPage(r) {
   if (ff) ff.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(ff);
-    try {
+    await submitAccountForm(ff, async () => {
       const d = await api.req('/api/auth/forgot', { method: 'POST', body: { email: fd.get('email') } });
       toast(d.message, 5000);
-      go('login');
-    } catch (err) { toast(err.message); }
+      replaceRoute(withReturn('login', safeReturn(fd.get('return'))));
+    });
   });
 
   const rf = $('#resetForm');
   if (rf) rf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(rf);
-    try {
+    await submitAccountForm(rf, async () => {
       const d = await api.req('/api/auth/reset', { method: 'POST', body: { token: fd.get('token'), password: fd.get('password') } });
-      toast(d.message, 4000); go('login');
-    } catch (err) { toast(err.message, 3500); }
+      if (ME) signOutLocally();          // كلمة السر اتغيرت: الدخول من جديد بالكلمة الجديدة
+      toast(d.message, 4000); replaceRoute('login');
+    });
   });
 
   /* ---- الإدارة ---- */
@@ -2298,6 +2444,12 @@ function bindPage(r) {
   });
 }
 
+function signOutLocally() {
+  api.setToken(''); ME = null; NOTIFS = []; MY.orders = []; MY.loaded = false; MY.error = '';
+  AD.orders = []; AD.users = []; AD.customers = []; AD.stats = null; AD.payCfg = null; AD.waCfg = null;
+  if (es) { es.close(); es = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
 function acceptLogin(data) {
   api.setToken(data.token); ME = data.user; NOTIFS = [];
   MY.loaded = false; MY.orders = []; MY.error = '';
@@ -2307,11 +2459,13 @@ function acceptLogin(data) {
 async function submitAccountForm(form, work) {
   if (form.dataset.busy === '1') return;
   const btn = $('button[type=submit]', form);
-  const label = btn?.textContent;
+  /* زرار الشيت فيه أيقونة + نص: بنغيّر النص بس عشان الأيقونة ما تختفيش */
+  const labelEl = (btn && typeof btn.querySelector === 'function' && btn.querySelector('[data-label]')) || btn;
+  const label = labelEl?.textContent;
   const error = $('[data-form-error]', form);
   form.dataset.busy = '1'; form.setAttribute('aria-busy', 'true');
   if (error) { error.hidden = true; error.textContent = ''; }
-  if (btn) { btn.disabled = true; btn.textContent = 'جاري الحفظ…'; }
+  if (btn) { btn.disabled = true; labelEl.textContent = (btn.dataset && btn.dataset.busyLabel) || 'جاري الحفظ…'; }
   try { await work(); }
   catch (err) {
     if (error) {
@@ -2322,11 +2476,12 @@ async function submitAccountForm(form, work) {
       } else { error.textContent = err.message; }
       error.hidden = false;
     }
-    toast(err.message, 4000);
+    /* في شيت الدخول الرسالة ظاهرة تحت الحقول بالفعل — من غير تكرار في توست */
+    if (!(error && typeof form.closest === 'function' && form.closest('#authSheet'))) toast(err.message, 4000);
   }
   finally {
     form.dataset.busy = ''; form.removeAttribute('aria-busy');
-    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (btn) { btn.disabled = false; labelEl.textContent = label; }
   }
 }
 
@@ -2399,6 +2554,10 @@ async function submitOrder(e) {
 
 /* ============================== ٢٠) كل الضغطات ============================== */
 document.addEventListener('click', async (e) => {
+  /* شاشة الترحيب: التبديل بين الفورمات من غير خطوات زيادة في التاريخ، وتذكّر إن الشيت اتفتح من الشاشة */
+  const swap = e.target.closest('a[data-replace]');
+  if (swap && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); replaceRoute(swap.getAttribute('href')); return; }
+  if (e.target.closest('a[data-gate-open]')) { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) sheetFromGate = true; return; }
   const el = e.target.closest('[data-act]');
   const notifBtn = e.target.closest('#notifBtn');
   if (notifBtn) { toggleNotifPanel(); return; }
@@ -2468,20 +2627,19 @@ document.addEventListener('click', async (e) => {
     }
     case 'logout':
       try { await api.req('/api/auth/logout', { method: 'POST' }); } catch {}
-      api.setToken(''); ME = null; NOTIFS = []; MY.orders = []; MY.loaded = false; MY.error = '';
-      AD.orders = []; AD.users = []; AD.customers = []; AD.stats = null; AD.payCfg = null; AD.waCfg = null;
-      if (es) { es.close(); es = null; }
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      toast('تم تسجيل الخروج'); go('home');
+      signOutLocally();
+      toast('تم تسجيل الخروج'); go('home');      // الرئيسية من غير حساب = شاشة الترحيب
       break;
     case 'demo':
       try {
         const d = await api.req('/api/auth/demo', { method: 'POST' });
         acceptLogin(d); startRealtime();
         await loadNotifs();
-        toast(`أهلًا ${ME.name} 👋`); go('account');
+        toast(`أهلًا ${ME.name} 👋`);
+        enterApp($('#loginForm input[name="return"]')?.value);
       } catch (err) { toast(err.message); }
       break;
+    case 'auth-close': e.preventDefault(); closeAuthSheet(); break;
     case 'pay-now': {
       toast('بنجهّزلك صفحة الدفع… ⏳', 2500);
       try {
@@ -2712,9 +2870,9 @@ window.addEventListener('hashchange', async (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeSheet(); closeDrawer(); $('#notifPanel')?.classList.add('hidden'); }
+  if (event.key === 'Escape') { closeSheet(); closeDrawer(); $('#notifPanel')?.classList.add('hidden'); closeAuthSheet(); }
   if (event.key === 'Tab') {
-    const dialog = $('#sheet.show .sheet') || $('#drawer.show .drawer');
+    const dialog = $('#sheet.show .sheet') || $('#drawer.show .drawer') || $('#authSheet');
     if (!dialog) return;
     const elements = $$('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]', dialog)
       .filter((el) => el.getClientRects().length);

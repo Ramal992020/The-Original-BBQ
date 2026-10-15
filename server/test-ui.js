@@ -165,9 +165,12 @@ test('payment and app use the same theme implementation and palette', () => {
   assert.match(css, /env\(safe-area-inset-bottom/);
 });
 
+const CUSTOMER = "ME = {id:'customer', name:'عميل', email:'customer@example.com', role:'customer'}";
+
 test('ordering works at #/orders and the legacy #/menu alias', async () => {
   for (const hash of ['#/orders', '#/menu']) {
     const ui = harness({ hash });
+    ui.evaluate(CUSTOMER);
     await ui.evaluate('render()');
     assert.match(ui.view.innerHTML, /ordering-page/);
     assert.deepEqual(cardIDs(ui.view.innerHTML), ['m1', 'm2', 'r1', 'o1']);
@@ -178,10 +181,136 @@ test('ordering works at #/orders and the legacy #/menu alias', async () => {
 test('order history is a separate guest-protected route, with correct login return links', async () => {
   const ui = harness({ hash: '#/my-orders' });
   await ui.evaluate('render()');
-  assert.match(ui.view.innerHTML, /return=my-orders/);
+  assert.match(ui.view.innerHTML, /href="#\/login\?return=my-orders"/);
+  assert.match(ui.view.innerHTML, /href="#\/signup\?return=my-orders"/);
   assert.doesNotMatch(ui.view.innerHTML, /ordering-page/);
+  ui.evaluate(CUSTOMER + '; api.req = async () => ({ orders: [] })');
+  await ui.evaluate('render()');
   assert.match(ui.view.innerHTML, /data-to="my-orders" class="nav-item active on"/);
+  assert.doesNotMatch(ui.view.innerHTML, /ordering-page|welcome-gate/);
   assert.match(source('pay.html'), /href="\/#\/my-orders"/);
+});
+
+test('guests get the welcome screen before any page — the mock-up art, LOGIN and Register!, and no app chrome', async () => {
+  for (const [hash, ret] of [['#/', ''], ['#/home', ''], ['#/orders?cat=rolls', '?return=orders%3Fcat%3Drolls'], ['#/checkout', '?return=checkout']]) {
+    const ui = harness({ hash });
+    ui.evaluate("addToCart(MENU[0], 1, [], '')");
+    await ui.evaluate('render()');
+    const html = ui.view.innerHTML;
+    assert.match(html, /<main class="welcome-gate is-intro" id="welcomeGate"/);
+    assert.match(html, /<img class="welcome-art" src="\/img\/welcome-art\.svg\?v=[0-9a-f]{12}"[^>]*alt="Welcome to The Original BBQ/);
+    assert.match(html, /<div class="welcome-planet" aria-hidden="true"><\/div>/);   // the arch extender; the doodles are inside the art
+    assert.ok(html.includes(`<a class="welcome-login" href="#/login${ret}" data-gate-open>`), hash);
+    assert.ok(html.includes(`<a class="welcome-register" href="#/signup${ret}" data-gate-open>`), hash);
+    assert.match(html, />LOGIN<\/span><span class="sr-only"> — تسجيل الدخول</);
+    assert.match(html, />Register!<\/span><span class="sr-only"> — إنشاء حساب جديد</);   // the art draws the glyphs; the link is a transparent overlay
+    assert.match(html, /<h1 class="sr-only">/);
+    assert.doesNotMatch(html, /class="nav-item|app-header|ordering-page|role="dialog"/);
+    assert.equal(ui.document.body.classList.contains('is-gated'), true);
+    assert.equal(ui.meta.getAttribute('content'), '#000000');
+    assert.equal(ui.elements.get('#cartBar').classList.contains('show'), false);
+  }
+});
+
+test('the welcome art files exist, are cache-busted by content, and keep the mock-up palette', () => {
+  const crypto = require('node:crypto');
+  const app = source('app.js');
+  for (const file of ['welcome-art.svg']) {
+    const svg = source('img/' + file);
+    const hash = crypto.createHash('sha256').update(svg).digest('hex').slice(0, 12);
+    assert.ok(app.includes(`/img/${file}?v=${hash}`), file + ' cache-busting hash');
+    assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+    assert.doesNotMatch(svg, /<script|NaN|href="(?!#)/);
+  }
+  assert.ok(!app.includes('welcome-pattern'), 'the stand-in doodle pattern is gone now that the original art carries its own');
+  assert.ok(!require('node:fs').existsSync(require('node:path').join(__dirname, '..', 'public', 'img', 'welcome-pattern.svg')));
+  const art = source('img/welcome-art.svg');
+  assert.match(art, /viewBox="-438\.2 -174 228 498"/);
+  for (const colour of ['#9B0F14', '#9D0E12', '#E62823', '#FFFFFF']) assert.ok(art.includes(colour), colour);
+  const css = source('styles.css');
+  for (const colour of ['#C3C3C3', '#010101', '#F60205', '#FDFDFD']) assert.ok(css.includes(colour), colour);
+  assert.match(css, /--u: min\(calc\(100vw \/ 228\)/);
+});
+
+test('login, sign-up, forgot and reset open as a modal sheet over the welcome art', async () => {
+  const cases = [
+    ['#/login?return=checkout', 'loginForm', '#/checkout'],
+    ['#/signup', 'signupForm', '#/'],
+    ['#/forgot?return=my-orders', 'forgotForm', '#/my-orders'],
+    ['#/reset?token=abc123', 'resetForm', '#/'],
+  ];
+  for (const [hash, form, close] of cases) {
+    const ui = harness({ hash });
+    await ui.evaluate('render()');
+    const html = ui.view.innerHTML;
+    assert.match(html, /class="welcome-gate is-intro has-sheet"/, hash);
+    assert.match(html, /<div class="welcome-stage" inert>/, hash);
+    assert.match(html, /role="dialog" aria-modal="true" aria-label="[^"]+" aria-describedby="authDesc"/, hash);
+    assert.ok(html.includes(`id="${form}"`), hash);
+    assert.ok(html.includes(`data-close="${close}"`), hash);
+    assert.match(html, /class="auth-close" href="[^"]*" data-act="auth-close" aria-label="إغلاق/, hash);
+    assert.match(html, /<span data-label>/, hash);
+  }
+  const ui = harness({ hash: '#/login?return=checkout' });
+  await ui.evaluate('render()');
+  const login = ui.view.innerHTML;
+  assert.match(login, /name="return" value="checkout"/);
+  assert.match(login, /<a href="#\/login\?return=checkout" data-replace class="on" aria-current="page">/);
+  assert.match(login, /<a href="#\/signup\?return=checkout" data-replace>/);
+  assert.match(login, /<a href="#\/forgot\?return=checkout" data-replace>/);
+  assert.match(login, /href="#\/login\?return=checkout" data-gate-open/);   // the art behind keeps its links
+  const reset = harness({ hash: '#/reset?token=abc123' });
+  await reset.evaluate('render()');
+  assert.match(reset.view.innerHTML, /name="token" value="abc123"/);
+  assert.doesNotMatch(reset.view.innerHTML, /class="auth-tabs"/);
+});
+
+test('return targets stay inside the app and never loop back to an auth page', () => {
+  const ui = harness();
+  const ret = (v) => ui.evaluate(`safeReturn(${JSON.stringify(v)})`);
+  assert.equal(ret('orders?cat=rolls'), 'orders?cat=rolls');
+  assert.equal(ret('#/order/BBQ-1?pay=success'), 'order/BBQ-1?pay=success');
+  for (const loop of ['', 'home', '#/', 'login', '#/signup?return=x', 'forgot', 'reset?token=1', 'welcome', 'setup',
+    'https://evil.example/', '//evil.example', 'javascript:alert(1)', '?x=1']) assert.equal(ret(loop), '', loop);
+});
+
+test('a signed-in user opening an auth link goes straight in, and the gate never shows', async () => {
+  for (const [hash, target] of [['#/login?return=checkout', '#/checkout'], ['#/signup', '#/'], ['#/welcome', '#/'], ['#/forgot', '#/']]) {
+    const ui = harness({ hash });
+    ui.evaluate(CUSTOMER);
+    await ui.evaluate('render()');
+    assert.equal(ui.context.location.hash, target, hash);
+    assert.doesNotMatch(ui.view.innerHTML, /welcome-gate/, hash);
+  }
+});
+
+test('leaving the gate restores the theme colour and the cart bar', async () => {
+  const ui = harness({ hash: '#/orders' });
+  ui.evaluate("addToCart(MENU[0], 1, [], '')");
+  await ui.evaluate('render()');
+  assert.equal(ui.meta.getAttribute('content'), '#000000');
+  ui.evaluate("toggleTheme()");
+  assert.equal(ui.meta.getAttribute('content'), '#000000');   // the welcome art keeps its black top
+  ui.evaluate(CUSTOMER);
+  await ui.evaluate('render()');
+  assert.equal(ui.document.body.classList.contains('is-gated'), false);
+  assert.equal(ui.meta.getAttribute('content'), '#FDF9F3');
+  assert.equal(ui.elements.get('#cartBar').classList.contains('show'), true);
+});
+
+test('busy account buttons change their label but keep the red badge icon', async () => {
+  const ui = harness();
+  const label = { textContent: 'دخول' };
+  const button = { disabled: false, textContent: 'دخول', dataset: { busyLabel: 'جاري الدخول…' }, querySelector: (s) => s === '[data-label]' ? label : null };
+  const form = { dataset: {}, querySelector: (s) => s === '[data-form-error]' ? null : button, setAttribute() {}, removeAttribute() {} };
+  ui.context.form = form;
+  let finish;
+  ui.context.work = () => new Promise((resolve) => { finish = resolve; });
+  const running = ui.evaluate('submitAccountForm(form, work)');
+  assert.equal(label.textContent, 'جاري الدخول…');
+  assert.equal(button.textContent, 'دخول');
+  finish(); await running;
+  assert.equal(label.textContent, 'دخول'); assert.equal(button.disabled, false);
 });
 
 test('menu groups come from real categories, not invented demo food', () => {
