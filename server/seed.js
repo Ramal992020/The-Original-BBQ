@@ -175,7 +175,9 @@ const SETTINGS = {
     enabled: false,
     provider: 'console',              // console | link | meta | twilio | greenapi | ultramsg | callmebot
     defaultCountryCode: '20',
-    requireOptIn: true,               // مبعتش لحد ما العميل يوافق
+    /* false = الكل بيستلم التحديثات ما عدا اللي موقّف (الأنسب) ·
+       true = الموافقة الصريحة بس: نبلّغ بس العميل اللي موافق بنفسه */
+    requireOptIn: false,
     staffEnabled: false,
     staffNumbers: [],
     notifyOn: { new: true, received: true, preparing: true, on_way: true, delivered: true, cancelled: true, paid: true },
@@ -216,6 +218,10 @@ function seed() {
     const patch = {};
     if (!cur.paymentConfig) patch.paymentConfig = SETTINGS.paymentConfig;
     if (!cur.whatsappNotify) patch.whatsappNotify = SETTINGS.whatsappNotify;
+    /* «الموافقة الصريحة» القديمة كانت اسمًا فقط (الكود كان بيبعت للكل ما عدا
+       الموقّف) — نوحيها للسلوك الفعلي عشان التحديثات متتوقفش على طلبات قديمة
+       بلا حقل موافقة صريح. الأدمن يقدر يعيد تفعيلها من اللوحة لو عايزها. */
+    else if (cur.whatsappNotify.requireOptIn === true) patch.whatsappNotify = { ...cur.whatsappNotify, requireOptIn: false };
     if (cur.statuses?.some((status) => status.id === 'new' && status.note === 'وصلنا طلبك وبدأنا نجهّزه')) {
       patch.statuses = cur.statuses.map((status) => status.id === 'new' ? { ...status, note: SETTINGS.statuses[0].note } : status);
     }

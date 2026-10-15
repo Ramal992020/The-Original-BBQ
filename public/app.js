@@ -1353,7 +1353,12 @@ function adminWhatsappHTML() {
         <div><label class="lbl">كود الدولة الافتراضي</label><input name="defaultCountryCode" value="${h(c.defaultCountryCode || '20')}" maxlength="4"></div>
         <div style="display:flex;align-items:flex-end"><button class="btn btn-sm btn-ghost btn-block" type="button" data-act="wa-test">📤 ابعت رسالة تجربة</button></div>
       </div>
-      <label class="opt" style="margin-top:12px"><span>أرسل تحديثات الحالة للعميل (لو موافق)</span>
+      <div id="waProviderWarn" class="small" style="margin-top:8px" role="note"></div>
+      <label class="opt" style="margin-top:12px;align-items:flex-start">
+        <span style="flex:1">
+          <span>وضع الموافقة الصريحة: نبلّغ بس العميل اللي موافق بنفسه</span>
+          <span class="small muted" style="display:block;margin-top:2px">لو مقفولة: كل العملاء بيستلموا التحديثات ما عدا اللي وقّف الإشعارات هو بنفسه (الأنسب عادة)</span>
+        </span>
         <input type="checkbox" name="requireOptIn" ${c.requireOptIn !== false ? 'checked' : ''}></label>
       <label class="opt"><span>ابعتلي كمان للرقم ده عند وصول طلب جديد</span>
         <input type="checkbox" name="staffEnabled" ${c.staffEnabled ? 'checked' : ''}></label>
@@ -1871,11 +1876,12 @@ function bindPage(r) {
   if (pf) pf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(pf);
+    const body = { name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'), address: fd.get('address') };
+    /* بنسجّل تفضيل الواتساب بس لو المربع ظاهر (الميزة مفعّلة) —
+       وإلّا أي حفظ بيانات هيُسجّل العميل كـ«موقوف» من غير وعيه. */
+    if (pf.querySelector('input[name="notifyWhatsapp"]')) body.notifyWhatsapp = fd.get('notifyWhatsapp') != null;
     try {
-      const d = await api.req('/api/me', { method: 'PATCH', body: {
-        name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'), address: fd.get('address'),
-        notifyWhatsapp: fd.get('notifyWhatsapp') != null,
-      } });
+      const d = await api.req('/api/me', { method: 'PATCH', body });
       ME = d.user; toast('تم حفظ البيانات ✅');
     } catch (err) { toast(err.message); }
   });
@@ -2032,9 +2038,15 @@ function bindPage(r) {
 
   const waf = $('#waCfgForm');
   if (waf) {
+    const providerWarning = {
+      console: '⚠️ وضع التجربة: الرسالة بتتسجل في السجل هنا بس ومش بيوصلها لأي موبايل. عشان توصل للعميل فعليًا اختار مزوّد حقيقي (Meta / Twilio / Green API / CallMeBot…) واضبط مفاتيحه، وبعدين اضغط «📤 ابعت رسالة تجربة» على رقمك.',
+      link: '⚠️ وضع الرابط: السيرفر بيجهّز wa.me جاهز بيتسجل في السجل — حد المطعم هو اللي بيفتحه ويبعت يدويًا (مش إرسال تلقائي).',
+    };
     const show = () => {
       const v = $('#waProvider').value;
       $$('.wa-grp', waf).forEach((g) => { g.style.display = g.getAttribute('data-grp') === v ? '' : 'none'; });
+      const w = $('#waProviderWarn');
+      if (w) w.textContent = providerWarning[v] || '';
     };
     $('#waProvider')?.addEventListener('change', show);
     show();
@@ -2154,10 +2166,13 @@ async function submitOrder(e) {
     name: fd.get('name'), phone: fd.get('phone'), area: fd.get('area'),
     address: fd.get('address'), time: fd.get('time'), notes: fd.get('notes'),
   };
+  /* مربع الواتساب بيظهر بس لما الميزة مفعّلة — لو مش ظاهر، بنسجّل تفضيل الحساب
+     (مفعّل افتراضيًا) بدل ما نرسل «موقوف» من غير ما العميل اختار حاجة. */
+  const waBox = form.querySelector('input[name="notifyWhatsapp"]');
   const body = {
     items: cart.map((c) => ({ id: c.id, qty: c.qty, addons: c.addons, note: c.note })),
     customer, payment: fd.get('payment'), promoCode: promoCode || undefined,
-    notifyWhatsapp: fd.get('notifyWhatsapp') != null,
+    notifyWhatsapp: waBox ? fd.get('notifyWhatsapp') != null : (ME.notifyWhatsapp !== false),
   };
   const btn = $('button[type=submit]', form);
   if (btn) { btn.disabled = true; btn.textContent = 'بنسجّل طلبك…'; }
