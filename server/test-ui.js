@@ -600,17 +600,46 @@ test('storage errors are visible rather than a fake empty order history', () => 
 test('live polling never discards unsaved admin forms or a focused order search', async () => {
   const ui = harness({ hash: '#/admin' });
   ui.evaluate(`ME = {id:'owner', role:'admin'}; AD.tab = 'settings'; let refreshes = 0;
-    loadAdminStats = async () => {}; loadAdminOrders = async () => {};
+    loadAdminLive = async () => true;
     api.req = async () => ({notifications:[]}); softRefreshAdmin = () => { refreshes++; };`);
-  await ui.evaluate('refreshLiveState()');
+  await ui.evaluate('refreshLiveState(true)');
   assert.equal(ui.evaluate('refreshes'), 0);
   ui.evaluate("AD.tab = 'orders'");
   ui.document.activeElement = { closest: () => ({}) };
-  await ui.evaluate('refreshLiveState()');
+  await ui.evaluate('refreshLiveState(true)');
   assert.equal(ui.evaluate('refreshes'), 0);
   ui.document.activeElement = null;
-  await ui.evaluate('refreshLiveState()');
+  await ui.evaluate('refreshLiveState(true)');
   assert.equal(ui.evaluate('refreshes'), 1);
+});
+
+test('loadAdminLive uses one combined endpoint and updates stats, orders and notifications', async () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.evaluate(`ME = {id:'owner', role:'admin'}; NOTIFS = []; AD.orders = []; AD.stats = null;
+    var liveCalls = [];
+    api.req = async (path) => { liveCalls.push(path);
+      return { notifications: [{ id: 'n1', read: false, silent: false, title: 'طلب جديد', body: 'x' }],
+        stats: { today: { orders: 2 } }, orders: [{ id: 'BBQ-1', status: 'new' }], total: 1 }; }`);
+  const changed = await ui.evaluate('loadAdminLive()');
+  assert.equal(changed, true);
+  assert.equal(ui.evaluate('liveCalls.length'), 1);
+  assert.match(ui.evaluate('liveCalls[0]'), /^\/api\/admin\/live\?/);
+  assert.equal(ui.evaluate('AD.orders[0].id'), 'BBQ-1');
+  assert.equal(ui.evaluate('AD.stats.today.orders'), 2);
+  assert.equal(ui.evaluate('NOTIFS[0].id'), 'n1');
+  /* جولة بنفس البيانات → مفيش تغيير (التباطؤ التلقائي بيعتمد على ده) */
+  assert.equal(await ui.evaluate('loadAdminLive()'), false);
+  assert.equal(ui.evaluate('liveCalls.length'), 2);
+});
+
+test('rapid auto refreshes are coalesced within the minimum gap window', async () => {
+  const ui = harness({ hash: '#/admin' });
+  ui.evaluate(`ME = {id:'owner', role:'admin'}; AD.tab = 'dash';
+    var liveRuns = 0; loadAdminLive = async () => { liveRuns++; return false; };`);
+  await ui.evaluate('refreshLiveState(true)');
+  const skipped = await ui.evaluate('refreshLiveState(false)');
+  assert.equal(skipped, false);
+  assert.equal(ui.evaluate('liveRuns'), 1);   /* النداء المتلاحق اتجاهله الـthrottle */
 });
 
 test('account forms block duplicate submits and show an API failure without accepting a login', async () => {

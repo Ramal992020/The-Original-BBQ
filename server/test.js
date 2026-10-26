@@ -263,6 +263,13 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
   check('إحصائيات اليوم (طلبات + مبيعات + عدّاد لكل حالة)', stats.status === 200 && stats.data.today.orders >= 4 && stats.data.today.sales > 0, 'orders=' + (stats.data.today || {}).orders);
   check('عدّاد الحالات موجود', ['new', 'received', 'preparing', 'on_way', 'delivered', 'cancelled'].every((k) => k in stats.data.today.counts));
 
+  const live = await req('GET', '/api/admin/live?status=delivered', { token: sup.token });
+  check('نقطة التحديث المجمّعة (إشعارات + إحصائيات + طلبات في طلب واحد)',
+    live.status === 200 && Array.isArray(live.data.notifications)
+    && !!live.data.stats && Array.isArray(live.data.orders)
+    && live.data.orders.every((o) => o.status === 'delivered') && live.data.orders.length >= 1);
+  check('نقطة live بتحترم صلاحيات العملاء', (await req('GET', '/api/admin/live', { token: cust.token })).status === 403);
+
   const filtered = await req('GET', '/api/admin/orders?status=delivered', { token: sup.token });
   check('فلترة بالحالة', filtered.data.orders.every((o) => o.status === 'delivered') && filtered.data.orders.length >= 1);
 
@@ -274,6 +281,12 @@ async function req(method, url, { token, body, raw, headers = {} } = {}) {
 
   const customers = await req('GET', '/api/admin/customers', { token: sup.token });
   check('صفحة بيانات العملاء', customers.status === 200 && customers.data.customers.length >= 2 && 'total' in customers.data.customers[0]);
+
+  const backup = await req('GET', '/api/admin/backup', { token: admin.token });
+  check('النسخة الاحتياطية الكاملة بكل المجموعات',
+    backup.status === 200 && !!backup.data.at && Array.isArray(backup.data.backup.orders)
+    && Array.isArray(backup.data.backup.menu) && Array.isArray(backup.data.backup.users));
+  check('النسخة الاحتياطية محمية عن العملاء', (await req('GET', '/api/admin/backup', { token: cust.token })).status === 403);
 
   /* ---------------------------- 8) إدارة المنيو والصور ---------------------------- */
   console.log('\n【 إدارة المنيو والصور 】');

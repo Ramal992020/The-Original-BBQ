@@ -74,6 +74,7 @@ async function worker(t, env = {}) {
   t.after(stop);
   return {
     stop,
+    port,
     logs: () => output + errors,
     async req(method, route, { token, body, key } = {}) {
       const headers = {};
@@ -290,4 +291,45 @@ test('serverless + Supabase runs persistent; SSE is refused in favour of polling
   assert.equal((await w.req('GET', '/api/admin/orders', { token: owner.token })).data.orders.length, 1);
   const notes = (await w.req('GET', '/api/notifications', { token: owner.token })).data;
   assert.equal(notes.unread, 1);
+});
+
+/* ٥) الصور: تحميل كسول لمجموعة files — مش مع كل طلب، وجلب عند الطلب عبر bbq_get_row */
+test('images are excluded from the full load and fetched on demand across workers', async (t) => {
+  fake.reset();
+  const a = await worker(t, {});
+  const owner = await login(a);
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+  const boundary = '----bbqtest' + Date.now();
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="t.png"\r\nContent-Type: image/png\r\n\r\n`),
+    png, Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const up = await fetch('http://127.0.0.1:' + a.port + '/api/admin/menu/s1/image', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + owner.token, 'content-type': 'multipart/form-data; boundary=' + boundary },
+    body: payload,
+  });
+  const upJson = await up.json();
+  assert.equal(up.status, 200, JSON.stringify(upJson));
+  assert.match(upJson.item.image, /^\/api\/img\//);
+
+  /* جلب الصورة بلا صلاحيات (روابط عامة بكاش طويل) — عبر bbq_get_row عند الطلب */
+  const img = await fetch('http://127.0.0.1:' + a.port + upJson.item.image);
+  assert.equal(img.status, 200);
+  const imgBytes = new Uint8Array(await img.arrayBuffer());
+  assert.ok(imgBytes.byteLength > 0);
+  const missing = await fetch('http://127.0.0.1:' + a.port + '/api/img/does-not-exist');
+  assert.equal(missing.status, 404);
+
+  /* عامل جديد (cold): الصورة محفوظة رغم إن التحميل الكامل بقى بيستثني files */
+  const b = await worker(t, {});
+  const imgB = await fetch('http://127.0.0.1:' + b.port + upJson.item.image);
+  assert.equal(imgB.status, 200);
+  const imgBBytes = new Uint8Array(await imgB.arrayBuffer());
+  assert.deepEqual(Array.from(imgBBytes), Array.from(imgBytes));
+
+  /* التحميل الكامل فعلًا مش جايب الصور (الحِمل الثقيل اتشال من كل طلب) */
+  assert.equal(fake.loadCollections({ includeFiles: false }).files, undefined);
+  assert.ok((fake.loadCollections({ includeFiles: true }).files || []).length >= 1);
 });

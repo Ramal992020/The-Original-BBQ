@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const store = require('./store');
 const auth = require('./auth');
 const seed = require('./seed');
@@ -132,6 +133,58 @@ function publicSettings() {
 }
 
 const menuPublic = () => store.all('menu').filter((m) => m.active !== false);
+
+/* --------------------------- حملات لوحة الإدارة --------------------------- */
+/* دوال مشتركة بين نقاط GET المنفصلة ونقطة /api/admin/live المجمّعة (طلب واحد
+   بدل ٣ طلبات متصارعة على القفل مع كل تحديث للوحة). */
+function adminStatsPayload() {
+  const today = new Date().toDateString();
+  const all = store.all('orders');
+  const todays = all.filter((o) => new Date(o.createdAt).toDateString() === today);
+  const counts = {};
+  for (const s of settings().statuses) counts[s.id] = 0;
+  for (const o of todays) counts[o.status] = (counts[o.status] || 0) + 1;
+  const paidToday = todays.filter((o) => o.payment_status === 'paid');
+  const payCounts = { paid: 0, pending: 0, unpaid: 0, failed: 0, refunded: 0 };
+  for (const o of todays) { const k = o.payment_status || 'unpaid'; payCounts[k] = (payCounts[k] || 0) + 1; }
+  return {
+    today: {
+      orders: todays.length,
+      sales: todays.filter((o) => o.status !== 'cancelled').reduce((x, o) => x + o.total, 0),
+      paidSales: paidToday.reduce((x, o) => x + o.total, 0),
+      paidOrders: paidToday.length,
+      payCounts,
+      counts,
+    },
+    all: { orders: all.length, sales: all.filter((o) => o.status !== 'cancelled').reduce((x, o) => x + o.total, 0) },
+    statuses: settings().statuses,
+  };
+}
+
+function adminOrdersPayload(q) {
+  let rows = store.all('orders').slice();
+  const status = q.get('status'), search = (q.get('q') || '').trim().toLowerCase();
+  const pay = q.get('payment');
+  const from = q.get('from'), to = q.get('to');
+  if (status && status !== 'all') rows = rows.filter((o) => o.status === status);
+  if (pay && pay !== 'all') rows = rows.filter((o) => (o.payment_status || 'unpaid') === pay);
+  if (search) {
+    rows = rows.filter((o) =>
+      [o.id, o.customer?.name, o.customer?.phone, o.customer?.address, o.customer?.email, o.user_id]
+        .filter(Boolean).some((v) => String(v).toLowerCase().includes(search)));
+  }
+  if (from) rows = rows.filter((o) => new Date(o.createdAt) >= new Date(from));
+  if (to) rows = rows.filter((o) => new Date(o.createdAt) <= new Date(to + 'T23:59:59'));
+  rows.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const limit = Math.min(500, Number(q.get('limit') || 100));
+  return { orders: rows.slice(0, limit), total: rows.length };
+}
+
+function notificationsPayload(u) {
+  const rows = store.filter('notifications', (n) => String(n.userId) === String(u.id))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
+  return { notifications: rows, unread: rows.filter((n) => !n.read).length };
+}
 
 function orderItemsFlat(order) {
   return order.items.map((i, idx) => ({
@@ -543,7 +596,7 @@ async function api(req, res, u, url) {
 
   /* صورة مخزّنة في قاعدة البيانات (وضع Vercel) — مع كاش قوي عشان متتطلبش كل مرة */
   if (p.startsWith('/api/img/')) {
-    const f = imagekit.getFile(decodeURIComponent(p.replace('/api/img/', '')));
+    const f = await imagekit.getFile(decodeURIComponent(p.replace('/api/img/', '')));
     if (!f) return bad(404, 'الصورة غير موجودة');
     res.writeHead(200, {
       'content-type': f.mime || 'image/jpeg',
@@ -610,9 +663,7 @@ async function api(req, res, u, url) {
   /* ---------------------------- الإشعارات ---------------------------- */
   if (p === '/api/notifications') {
     if (!u) return bad(401, 'محتاج تسجيل دخول');
-    const rows = store.filter('notifications', (n) => String(n.userId) === String(u.id))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
-    return send(200, { notifications: rows, unread: rows.filter((n) => !n.read).length });
+    return send(200, notificationsPayload(u));
   }
   if (p === '/api/notifications/read' && req.method === 'POST') {
     if (!u) return bad(401, 'محتاج تسجيل دخول');
@@ -646,58 +697,38 @@ async function api(req, res, u, url) {
     if (!u) return bad(401, 'محتاج تسجيل دخول');
     if (!auth.isStaff(u)) return bad(403, 'ممنوع — الصفحة دي للمشرفين والأدمن بس');   // حماية حقيقية على السيرفر
 
-    if (p === '/api/admin/stats') {
-      const today = new Date().toDateString();
-      const all = store.all('orders');
-      const todays = all.filter((o) => new Date(o.createdAt).toDateString() === today);
-      const counts = {};
-      for (const s of settings().statuses) counts[s.id] = 0;
-      for (const o of todays) counts[o.status] = (counts[o.status] || 0) + 1;
-      const paidToday = todays.filter((o) => o.payment_status === 'paid');
-      const payCounts = { paid: 0, pending: 0, unpaid: 0, failed: 0, refunded: 0 };
-      for (const o of todays) { const k = o.payment_status || 'unpaid'; payCounts[k] = (payCounts[k] || 0) + 1; }
+    /* تحديث اللوحة الحي في طلب شبكة واحد — بدل ٣ طلبات كانت بتتصارع على القفل */
+    if (p === '/api/admin/live') {
       return send(200, {
-        today: {
-          orders: todays.length,
-          sales: todays.filter((o) => o.status !== 'cancelled').reduce((x, o) => x + o.total, 0),
-          paidSales: paidToday.reduce((x, o) => x + o.total, 0),
-          paidOrders: paidToday.length,
-          payCounts,
-          counts,
-        },
-        all: { orders: all.length, sales: all.filter((o) => o.status !== 'cancelled').reduce((x, o) => x + o.total, 0) },
-        statuses: settings().statuses,
+        ...notificationsPayload(u),
+        stats: adminStatsPayload(),
+        ...adminOrdersPayload(q),
       });
     }
 
-    if (p === '/api/admin/orders') {
-      let rows = store.all('orders').slice();
-      const status = q.get('status'), search = (q.get('q') || '').trim().toLowerCase();
-      const pay = q.get('payment');
-      const from = q.get('from'), to = q.get('to');
-      if (status && status !== 'all') rows = rows.filter((o) => o.status === status);
-      if (pay && pay !== 'all') rows = rows.filter((o) => (o.payment_status || 'unpaid') === pay);
-      if (search) {
-        rows = rows.filter((o) =>
-          [o.id, o.customer?.name, o.customer?.phone, o.customer?.address, o.customer?.email, o.user_id]
-            .filter(Boolean).some((v) => String(v).toLowerCase().includes(search)));
-      }
-      if (from) rows = rows.filter((o) => new Date(o.createdAt) >= new Date(from));
-      if (to) rows = rows.filter((o) => new Date(o.createdAt) <= new Date(to + 'T23:59:59'));
-      rows.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      const limit = Math.min(500, Number(q.get('limit') || 100));
-      return send(200, { orders: rows.slice(0, limit), total: rows.length });
-    }
+    if (p === '/api/admin/stats') return send(200, adminStatsPayload());
+
+    if (p === '/api/admin/orders') return send(200, adminOrdersPayload(q));
 
     if (p === '/api/admin/customers') {
       const users = store.filter('users', (x) => x.role === 'customer');
-      const orders = store.all('orders');
+      /* تجميع مرة واحدة بدل فلترة كل الطلبات لكل عميل (O(طلبات) بدل O(عملاء×طلبات)) */
+      const byUser = new Map();
+      for (const o of store.all('orders')) {
+        const key = String(o.user_id);
+        if (!byUser.has(key)) byUser.set(key, []);
+        byUser.get(key).push(o);
+      }
       const rows = users.map((x) => {
-        const mine = orders.filter((o) => String(o.user_id) === String(x.id));
+        const mine = byUser.get(String(x.id)) || [];
+        let lastOrder = null;
+        for (const o of mine) {
+          if (!lastOrder || new Date(o.createdAt) > new Date(lastOrder)) lastOrder = o.createdAt;
+        }
         return {
           ...auth.publicUser(x), orders: mine.length,
           total: mine.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + o.total, 0),
-          lastOrder: mine.length ? mine.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0].createdAt : null,
+          lastOrder,
         };
       }).sort((a, b) => b.total - a.total);
       return send(200, { customers: rows });
@@ -922,7 +953,7 @@ async function api(req, res, u, url) {
         const { files } = imagekit.parseMultipart(buf, ctype);
         const f = files.find((x) => x.field === 'image' || x.type.startsWith('image/'));
         if (!f) return bad(400, 'مفيش صورة في الطلب');
-        url = imagekit.saveUpload(f, { prefix: 'menu' }).url;
+        url = (await imagekit.saveUpload(f, { prefix: 'menu' })).url;
       } else {
         const b = await jsonBody(req);
         if (b.url && /^https?:\/\//i.test(b.url)) url = String(b.url).slice(0, 500);
@@ -1005,7 +1036,7 @@ async function api(req, res, u, url) {
     }
 
     if (p === '/api/admin/backup' && auth.isAdmin(u)) {
-      return send(200, { backup: store.backup(), at: new Date().toISOString() });
+      return send(200, { backup: await store.fullBackup(), at: new Date().toISOString() });
     }
 
     if (p === '/api/admin/outbox' && auth.isAdmin(u)) {
@@ -1030,6 +1061,27 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
+/* أنواع نصية قابلة للضغط — باقي الأصول (صور/خطوط) مضغوطة أصلًا */
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.webmanifest', '.svg', '.txt', '.ico']);
+/* كاش أصول التطبيق الثابتة (مجلد public فقط — مش رفوف المستخدمين):
+   بيوفّر قراءة القرص وحساب الهاش والضغط في كل طلب، وبيتحقق من mtime للتغيير. */
+const assetCache = new Map();
+
+function loadAsset(filePath, ext) {
+  const stat = fs.statSync(filePath);
+  const hit = assetCache.get(filePath);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit;
+  const data = fs.readFileSync(filePath);
+  const etag = '"' + crypto.createHash('sha1').update(data).digest('hex').slice(0, 16) + '"';
+  const asset = {
+    mtimeMs: stat.mtimeMs, size: stat.size, etag, data,
+    gzip: COMPRESSIBLE.has(ext) ? zlib.gzipSync(data, { level: 6 }) : null,
+  };
+  assetCache.set(filePath, asset);
+  if (assetCache.size > 200) assetCache.delete(assetCache.keys().next().value);  // سقف بسيط للذاكرة
+  return asset;
+}
+
 function serveStatic(req, res, url) {
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/') rel = '/index.html';
@@ -1051,15 +1103,30 @@ function serveStatic(req, res, url) {
     filePath = path.join(PUBLIC_DIR, 'index.html');       // SPA fallback (التوجيه بالـhash)
   }
   const ext = path.extname(filePath).toLowerCase();
-  const data = fs.readFileSync(filePath);
-  const etag = '"' + require('crypto').createHash('sha1').update(data).digest('hex').slice(0, 16) + '"';
+
+  /* الرفوف تُقرأ مباشرة (صور مضغوطة أصلًا)، وأصول public تُخدم من الكاش المضغوط */
+  let asset = null, data;
+  if (filePath.startsWith(PUBLIC_DIR)) {
+    try { asset = loadAsset(filePath, ext); } catch { asset = null; }
+  }
+  if (!asset) data = fs.readFileSync(filePath);
+  const etag = asset ? asset.etag : '"' + crypto.createHash('sha1').update(data).digest('hex').slice(0, 16) + '"';
   if (req.headers['if-none-match'] === etag) { res.writeHead(304); return res.end(); }
-  res.writeHead(200, {
+
+  const headers = {
     'content-type': MIME[ext] || 'application/octet-stream',
     'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=86400',
     etag,
-  });
-  res.end(data);
+  };
+  let body = asset ? asset.data : data;
+  const acceptsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+  if (asset && asset.gzip && acceptsGzip) {
+    headers['content-encoding'] = 'gzip';
+    headers['vary'] = 'accept-encoding';
+    body = asset.gzip;
+  }
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 /* ============================== السيرفر ============================== */
@@ -1092,7 +1159,14 @@ async function handle(req, res) {
     url.searchParams.delete('__path');
     if (url.pathname.startsWith('/api/')) {
       await ensureReady();
-      const reply = await store.transaction(() => api(req, res, auth.sessionUser(req), url));
+      /* طلبات القراءة بلا قفل عالمي ولا إعادة تحميل — webhooks الـGET بتكتب بيانات
+         (تأكيد الدفع) فتفضل جوه معاملة كاملة. ده أكبر سبب لارتفاع البينج في الإدارة. */
+      const isRead = (req.method === 'GET' || req.method === 'HEAD')
+        && !url.pathname.startsWith('/api/webhooks/');
+      /* الصور تتجاب بصف واحد فقط بدل تحميل قاعدة البيانات كاملة مع كل طلب صورة */
+      const runner = !isRead ? store.transaction
+        : url.pathname.startsWith('/api/img/') ? store.imageRead : store.read;
+      const reply = await runner(() => api(req, res, auth.sessionUser(req), url));
       if (reply) sendJSON(res, reply.code, reply.data);
       return;
     }

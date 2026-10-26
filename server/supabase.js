@@ -73,15 +73,25 @@ const ping = async () => {
   return String(out || '').toLowerCase();
 };
 
-/** { users: [...], orders: [...] } — كل صف هو الكائن الأصلي المحفوظ في data */
-async function load() {
-  const out = await rpc('bbq_load', {});
+/**
+ * { users: [...], orders: [...] } — كل صف هو الكائن الأصلي المحفوظ في data.
+ * افتراضيًا جدول الصور (bbq_files — base64 ثقيل) مش بيتحمّل؛ النسخ الاحتياطي
+ * الكامل بس هو اللي بيطلب includeFiles=true.
+ */
+async function load({ includeFiles = false } = {}) {
+  const out = await rpc('bbq_load', { p_include_files: includeFiles });
   if (!out || typeof out !== 'object' || Array.isArray(out)) throw fail('Invalid Supabase bbq_load response');
   for (const [name, rows] of Object.entries(out)) {
     if (!Array.isArray(rows)) throw fail('Invalid Supabase collection: ' + name);
   }
   return out;
 }
+
+/** صف واحد من جدول مخصص (مثل صورة من bbq_files) — أو null لو مش موجود. */
+const getRow = async (table, id) => rpc('bbq_get_row', { p_table: table, p_id: id });
+
+/** تحميل مجموعة واحدة كاملة (كسول — لمجموعة الصور جوه معاملة كتابة). */
+const collection = async (table) => rpc('bbq_collection', { p_table: table });
 
 const tryLock = async (token, ttlMs) => (await rpc('bbq_try_lock', { p_token: token, p_ttl_ms: ttlMs }, { timeout: 8000 })) === true;
 const renewLock = async (token, ttlMs) => (await rpc('bbq_renew_lock', { p_token: token, p_ttl_ms: ttlMs }, { timeout: 8000 })) === true;
@@ -103,4 +113,4 @@ const host = () => {
   try { return new URL(RAW_URL).host; } catch { return ''; }
 };
 
-module.exports = { configured, rpc, ping, load, tryLock, renewLock, releaseLock, commit, host, restBase };
+module.exports = { configured, rpc, ping, load, getRow, collection, tryLock, renewLock, releaseLock, commit, host, restBase };

@@ -1791,7 +1791,7 @@ function adminSettingsHTML() {
   <div class="box" style="margin-top:12px">
     <strong>التسجيل واستقبال الطلبات</strong>
     <p class="small muted" style="margin:6px 0 0">الحسابات والطلبات محفوظة على ${S.storage === 'postgres' ? 'قاعدة Supabase PostgreSQL الدائمة' : S.storage === 'redis' ? 'قاعدة Upstash Redis المشتركة (بديل قديم)' : 'قرص السيرفر (يلزم قرص دائم على الاستضافة)'}. أي عميل جديد يسجل كعميل فقط. الطلب يظهر هنا بإشعار بعد حفظه، وكلمة السر لا تُعرض لأي مستخدم.</p>
-    <p class="small muted" style="margin:6px 0 0">${S.realtime === false ? 'تحديث تلقائي كل ٥ ثوانٍ أثناء فتح التطبيق.' : 'إشعارات لحظية مع تحديث دوري احتياطي.'} الدفع الحقيقي متاح عند التوصيل، أو بعد إعداد Stripe / Paymob.</p>
+    <p class="small muted" style="margin:6px 0 0">${S.realtime === false ? 'تحديث تلقائي كل ١٠ ثوانٍ أثناء فتح التطبيق، يتباطأ تلقائيًا لـ٣٠ ثانية لما ما فيش جديد.' : 'إشعارات لحظية مع تحديث دوري احتياطي كل دقيقة.'} الدفع الحقيقي متاح عند التوصيل، أو بعد إعداد Stripe / Paymob.</p>
   </div>`;
 }
 
@@ -1978,6 +1978,14 @@ function renderNotifPanel() {
         </button>`).join('')}
     <div style="padding:10px 14px" class="small muted">الإشعارات بتوصل للمشرفين والأدمن بس عند أي طلب جديد.</div>`;
 }
+function renderNotifBadge() {
+  const btn = $('#notifBtn');
+  if (btn) {
+    const unread = NOTIFS.filter((n) => !n.read).length;
+    btn.innerHTML = `${icon('bell')}${unread ? `<span class="badge-n red">${formatAmount(unread)}</span>` : ''}`;
+  }
+}
+
 async function loadNotifs({ announce = false } = {}) {
   if (!isStaff()) return;
   const userId = ME.id;
@@ -1988,8 +1996,7 @@ async function loadNotifs({ announce = false } = {}) {
     const fresh = d.notifications.filter((n) => !known.has(n.id) && !n.read && !n.silent);
     NOTIFS = d.notifications;
     if (announce && fresh.length) toast(`🔔 ${fresh[0].title} — ${fresh[0].body}`, 5000);
-    const btn = $('#notifBtn');
-    if (btn) { const unread = NOTIFS.filter((n) => !n.read).length; btn.innerHTML = `${icon('bell')}${unread ? `<span class="badge-n red">${formatAmount(unread)}</span>` : ''}`; }
+    renderNotifBadge();
     if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
   } catch { /* ignore */ }
 }
@@ -2008,13 +2015,60 @@ let pollInterval = 0;
 let refreshingLive = false;
 let sseFailures = 0;
 
-async function refreshLiveState() {
-  if (!ME || refreshingLive) return;
+/* توقيتات التحديث — مراجعة شاملة لضغط الطلبات على قاعدة البيانات:
+   fast: على الاستضافة السيرفرلس (بلا SSE) · slow: تباطؤ تلقائي لما ما فيش جديد ·
+   sseSafety: شبكة أمان بطيئة بينما البث اللحظي SSE شغال (الجديد بيوصل فورًا بالأحداث). */
+const POLL = { fast: 10000, slow: 30000, sseSafety: 60000, minGap: 1500, backoffRounds: 3 };
+let lastAutoRefresh = 0;
+let unchangedRounds = 0;
+let lastAdminSignature = '';
+let lastCustomersFetch = 0;
+let lastUsersFetch = 0;
+
+function adminOrdersQuery() {
+  const p = new URLSearchParams();
+  if (AD.status && AD.status !== 'all') p.set('status', AD.status);
+  if (AD.payment && AD.payment !== 'all') p.set('payment', AD.payment);
+  if (AD.q) p.set('q', AD.q);
+  if (AD.range === 'today') p.set('from', new Date().toDateString());
+  return p;
+}
+
+/* تحديث اللوحة في طلب شبكة واحد: إشعارات + إحصائيات + طلبات (بدل ٣ طلبات متصارعة). */
+async function loadAdminLive() {
+  const userId = ME?.id;
+  const d = await api.req('/api/admin/live?' + adminOrdersQuery().toString());
+  if (ME?.id !== userId || !isStaff()) return false;
+  const known = new Set(NOTIFS.map((n) => n.id));
+  const fresh = (d.notifications || []).filter((n) => !known.has(n.id) && !n.read && !n.silent);
+  AD.stats = d.stats;
+  AD.orders = d.orders;
+  NOTIFS = d.notifications || [];
+  renderNotifBadge();
+  if ($('#notifPanel') && !$('#notifPanel').classList.contains('hidden')) renderNotifPanel();
+  if (fresh.length) toast(`🔔 ${fresh[0].title} — ${fresh[0].body}`, 5000);
+  const signature = JSON.stringify({
+    o: AD.orders.map((o) => o.id + ':' + o.status + ':' + (o.updatedAt || '')),
+    n: NOTIFS.filter((x) => !x.read).length,
+    s: AD.stats?.today?.orders,
+  });
+  const changed = signature !== lastAdminSignature;
+  lastAdminSignature = signature;
+  return changed;
+}
+
+async function refreshLiveState(force = false) {
+  if (!ME || refreshingLive) return false;
+  const now = Date.now();
+  if (!force && now - lastAutoRefresh < POLL.minGap) return false;  /* تجميع دفعات focus/visibility */
+  lastAutoRefresh = now;
   refreshingLive = true;
+  let changed = false;
   const userId = ME.id;
   try {
     const r = parseHash();
-    if (isStaff()) await loadNotifs({ announce: true });
+    /* جوه لوحة الإدارة loadAdminLive بيغطي الإشعارات — منعملش طلب تكرار */
+    if (isStaff() && r.name !== 'admin') await loadNotifs({ announce: true });
     if (['my-orders', 'order'].includes(r.name)) {
       const before = JSON.stringify(MY.orders);
       const oldError = MY.error;
@@ -2022,15 +2076,36 @@ async function refreshLiveState() {
       if (ME?.id === userId && (before !== JSON.stringify(MY.orders) || oldError !== MY.error)) softRender();
     }
     if (r.name === 'admin' && isStaff()) {
-      await Promise.all([loadAdminStats(), loadAdminOrders()]);
-      if (AD.tab === 'customers') AD.customers = (await api.req('/api/admin/customers')).customers;
-      if (AD.tab === 'users' && isAdmin()) AD.users = (await api.req('/api/admin/users')).users;
+      changed = await loadAdminLive();
+      /* العملاء والمستخدمين تقارير ثقيلة نسبيًا — تُجلب عند فتح التبويب كل ٣٠ ثانية بس */
+      if (AD.tab === 'customers' && now - lastCustomersFetch > 30000) {
+        AD.customers = (await api.req('/api/admin/customers')).customers;
+        lastCustomersFetch = now;
+      }
+      if (AD.tab === 'users' && isAdmin() && now - lastUsersFetch > 30000) {
+        AD.users = (await api.req('/api/admin/users')).users;
+        lastUsersFetch = now;
+      }
       /* Never discard an unsaved settings/payment/menu form or an active search. */
       const typing = document.activeElement?.closest?.('#adminBody input, #adminBody textarea, #adminBody select');
       if (ME?.id === userId && ['dash', 'orders', 'customers', 'users'].includes(AD.tab) && !typing) softRefreshAdmin();
     }
   } catch { /* Leave the last known data visible and retry; never invent a successful update. */ }
   finally { refreshingLive = false; }
+  return changed;
+}
+
+/* نبضة التحديث الدوري: تباطؤ تلقائي لما الدنيا هادية، ورجوع سريع مع أي تغيير. */
+async function pollTick() {
+  const changed = await refreshLiveState();
+  if (S.realtime !== false) return;
+  if (changed) {
+    unchangedRounds = 0;
+    if (pollInterval !== POLL.fast) startPolling(POLL.fast);
+  } else {
+    unchangedRounds += 1;
+    if (unchangedRounds >= POLL.backoffRounds && pollInterval !== POLL.slow) startPolling(POLL.slow);
+  }
 }
 
 function connectSSE() {
@@ -2052,26 +2127,35 @@ function connectSSE() {
     };
     es.onerror = () => {
       sseFailures += 1;
-      if (sseFailures >= 3) { es?.close(); es = null; startPolling(5000); }
+      if (sseFailures >= 3) { es?.close(); es = null; startPolling(POLL.fast); }
     };
     es.onopen = () => { sseFailures = 0; refreshLiveState(); };
-  } catch { startPolling(5000); }
+  } catch { startPolling(POLL.fast); }
 }
 
 /* Poll shared storage on Vercel; also catch SSE disconnects/multi-worker updates. */
-function startPolling(ms = 5000) {
+function startPolling(ms = POLL.fast) {
   if (pollTimer && pollInterval === ms) return;
   if (pollTimer) clearInterval(pollTimer);
   pollInterval = ms;
-  pollTimer = setInterval(refreshLiveState, ms);
+  pollTimer = setInterval(pollTick, ms);
 }
 function startRealtime() {
-  startPolling(S.realtime === false ? 5000 : 15000);
+  /* سيرفرلس: تحديث دوري سريع يتباطأ تلقائيًا · خادم حي: SSE فوري + شبكة أمان كل دقيقة */
+  startPolling(S.realtime === false ? POLL.fast : POLL.sseSafety);
   connectSSE();
 }
-window.addEventListener('online', refreshLiveState);
-window.addEventListener('focus', refreshLiveState);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshLiveState(); });
+window.addEventListener('online', () => refreshLiveState());
+window.addEventListener('focus', () => refreshLiveState());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    /* التبويب مخفي: نوقف النبض تمامًا لتقليل الحمل على السيرفر وقاعدة البيانات */
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  } else {
+    startPolling(pollInterval || POLL.fast);
+    refreshLiveState();
+  }
+});
 
 /* ============================== ١٧) الرسم والأحداث ============================== */
 function softRender() { render({ soft: true }); }
@@ -2449,12 +2533,14 @@ function signOutLocally() {
   AD.orders = []; AD.users = []; AD.customers = []; AD.stats = null; AD.payCfg = null; AD.waCfg = null;
   if (es) { es.close(); es = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  lastAdminSignature = ''; unchangedRounds = 0; lastCustomersFetch = 0; lastUsersFetch = 0;
 }
 function acceptLogin(data) {
   api.setToken(data.token); ME = data.user; NOTIFS = [];
   MY.loaded = false; MY.orders = []; MY.error = '';
   AD.orders = []; AD.stats = null; AD.users = []; AD.customers = [];
   AD.payCfg = null; AD.waCfg = null; AD.editing = null;
+  lastAdminSignature = ''; unchangedRounds = 0; lastCustomersFetch = 0; lastUsersFetch = 0;
 }
 async function submitAccountForm(form, work) {
   if (form.dataset.busy === '1') return;
