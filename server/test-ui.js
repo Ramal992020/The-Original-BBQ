@@ -642,6 +642,42 @@ test('rapid auto refreshes are coalesced within the minimum gap window', async (
   assert.equal(ui.evaluate('liveRuns'), 1);   /* النداء المتلاحق اتجاهله الـthrottle */
 });
 
+test('active order tracking keeps a steady fast cadence regardless of the idle backoff', () => {
+  const ui = harness({ hash: '#/order/BBQ-1' });
+  ui.evaluate(`ME = {id:'c1', role:'customer'}; S.realtime = false;
+    realtimeStarted = true; es = null; unchangedRounds = 99; pollInterval = 0;
+    MY.orders = [{ id: 'BBQ-1', status: 'preparing' }];
+    syncPollInterval();`);
+  assert.equal(ui.evaluate('activeTracking()'), true);
+  assert.equal(ui.evaluate('pollInterval'), 5000);   /* تتبع نشط = ٥ ثوانٍ ثابتة، التباطؤ مُتجاهَل */
+
+  /* نفس الإيقاع السريع من صفحة طلباتي */
+  ui.evaluate(`location.hash = '#/my-orders'; syncPollInterval();`);
+  assert.equal(ui.evaluate('pollInterval'), 5000);
+
+  /* الطلب وصل لحالة نهائية → التتبع السريع يتوقف ويرجع للإيقاع البطيء */
+  ui.evaluate(`MY.orders = [{ id: 'BBQ-1', status: 'delivered' }]; syncPollInterval();`);
+  assert.equal(ui.evaluate('activeTracking()'), false);
+  assert.equal(ui.evaluate('pollInterval'), 30000);
+
+  /* مغادرة صفحات التتبع تمامًا → نبض بطيء حتى مع طلب نشط */
+  ui.evaluate(`location.hash = '#/home'; MY.orders = [{ id: 'BBQ-2', status: 'new' }]; syncPollInterval();`);
+  assert.equal(ui.evaluate('activeTracking()'), false);
+  assert.equal(ui.evaluate('pollInterval'), 30000);
+
+  /* قناة SSE الحية شغالة → الإيقاع يبقى شبكة الأمان البطيئة مهما كانت الصفحة */
+  ui.evaluate(`location.hash = '#/order/BBQ-2'; es = {}; syncPollInterval();`);
+  assert.equal(ui.evaluate('pollInterval'), 60000);
+  ui.evaluate('es = null; realtimeStarted = false;');
+});
+
+test('syncPollInterval is a no-op before realtime starts (login/gate screens)', () => {
+  const ui = harness({ hash: '#/order/BBQ-9' });
+  ui.evaluate(`ME = {id:'c1', role:'customer'}; realtimeStarted = false; pollInterval = 0;
+    MY.orders = [{ id: 'BBQ-9', status: 'new' }]; syncPollInterval();`);
+  assert.equal(ui.evaluate('pollInterval'), 0);
+});
+
 test('account forms block duplicate submits and show an API failure without accepting a login', async () => {
   const ui = harness();
   const button = { disabled: false, textContent: 'إنشاء الحساب' };
