@@ -21,13 +21,24 @@ function rowsOf(name) {
   return [...table(name).values()].sort((a, b) => a.seq - b.seq).map((r) => r.data);
 }
 
-function loadCollections() {
+function loadCollections({ includeFiles = false } = {}) {
   const out = {};
   for (const name of tables.keys()) {
+    if (name === 'files' && !includeFiles) continue;   // الصور الثقيلة بتتجاب عند الطلب بس
     const rows = rowsOf(name);
     if (rows.length) out[name] = rows;
   }
   return out;
+}
+
+function getRow(name, id) {
+  const row = table(name).get(String(id));
+  return row ? row.data : null;
+}
+
+function getCollection(name) {
+  /* المحاكي بيخزن كل مجموعة باسمها في tables (زي ما bbq_docs بيفصل بالعمود collection). */
+  return rowsOf(name);
 }
 
 /* ---- lock (mirrors bbq_lock + bbq_try_lock/renew/release) ---- */
@@ -115,7 +126,9 @@ function commit(token, upserts, deletes) {
 function handleRpc(name, args) {
   switch (name) {
     case 'bbq_ping': return 'pong';
-    case 'bbq_load': return loadCollections();
+    case 'bbq_load': return loadCollections({ includeFiles: args.p_include_files === true });
+    case 'bbq_get_row': return getRow(args.p_table, args.p_id);
+    case 'bbq_collection': return getCollection(args.p_table);
     case 'bbq_try_lock': return tryLock(args.p_token, args.p_ttl_ms);
     case 'bbq_renew_lock': return renewLock(args.p_token, args.p_ttl_ms);
     case 'bbq_release_lock': return releaseLock(args.p_token);

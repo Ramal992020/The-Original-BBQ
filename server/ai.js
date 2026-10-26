@@ -122,7 +122,7 @@ async function generateFoodImage(item) {
     try {
       const b64 = await fn(item);
       if (b64) {
-        const saved = imagekit.saveBase64(b64);
+        const saved = await imagekit.saveBase64(b64);
         return { url: saved.url, source: 'ai', provider: name };
       }
     } catch (e) {

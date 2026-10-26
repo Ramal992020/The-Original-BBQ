@@ -40,6 +40,106 @@ let cache = new Map();
 let ready = null;
 let queue = Promise.resolve();
 
+/* ----------------------------------------------------------------------------
+   مسار القراءة السريع (طلبات GET):
+   - بلا قفل عالمي — القراءات ما بتعدّلش حاجة، فحرمانها من اللوك بيمنع تصافّ
+     طلبات الإدارة (سبب رئيسي لارتفاع البينج): طلب شبكة واحد بدل قفل+تحميل+فك قفل.
+   - القراءات المتزامية بتتشارك نفس التحميل (in-flight coalescing) عشان دفعة
+     التحديث الواحدة متعملش طلبات مكررة لنفس اللقطة.
+   - مفيش كاش بمدة صلاحية: كل قراءة بتجيب لقطة طازجة (عامل منفصل يشوف كتابات
+     العامل التاني فورًا)، وأي فشل شبكة بيرمي خطأ صريح — مفيش fallback صامت
+     لبيانات قديمة، والواجهة بتحتفظ بآخر بيانات وتعيد المحاولة.
+---------------------------------------------------------------------------- */
+let readInflight = null;
+
+function readContext(data) {
+  return { data, dirty: new Set(), effects: [], closed: true };
+}
+
+async function loadRemote() {
+  if (MODE === 'redis') return (await loadFromRedis()).data;
+  if (MODE === 'postgres') return loadFromSupabase();
+  return null;
+}
+
+/** قراءة بلا قفل: لقطة طازجة في كل طلب، والقراءات المتزامنة بتتشارك تحميلًا واحدًا. */
+async function read(work) {
+  const parent = context.getStore();
+  if (parent && !parent.closed) return work();   // جوه معاملة كتابة → نشارك لقطتها
+  await init();
+  let data;
+  if (MODE === 'file') {
+    data = loadFromDisk();                       // القرص المحلي: لقطة لحظية رخيصة، بلا طابور ولا قفل
+    cache = data;
+  } else {
+    if (!readInflight) {
+      readInflight = loadRemote().then((d) => {
+        cache = d;
+        readInflight = null;
+        return d;
+      }, (e) => { readInflight = null; throw e; });
+    }
+    data = await readInflight;                   // الطلبات المتزامنة بتتشارك نفس التحميل
+  }
+  return context.run(readContext(data), work);
+}
+
+/**
+ * مسار خفيف لطلبات الصور (/api/img/:id): يتخطّى تحميل قاعدة البيانات بالكامل
+ * ويجلب صف الصورة المطلوب فقط. جوه معاملة كتابة بيشارك لقطتها زي read().
+ */
+async function imageRead(work) {
+  const parent = context.getStore();
+  if (parent && !parent.closed) return work();
+  await init();
+  if (MODE === 'file') return read(work);   // على القرص: الكاش المحلي رخيص وأصلاً فيه الصور
+  return context.run(readContext(cache), work);  // getFile هيجيب الصورة المطلوبة بطلب واحد
+}
+
+/**
+ * تحميل مجموعة ناقصة داخل معاملة كتابة (لازم للصور: لم تعد تُحمّل مع كل طلب).
+ * بيُستدعى قبل أي تعديل على مجموعة files في التخزين السحابي.
+ */
+async function ensureCollection(name) {
+  const tx = context.getStore();
+  if (!tx || tx.closed) throw new Error('ensureCollection must run inside a write transaction');
+  if (tx.data.has(name)) return tx.data.get(name);
+  let rows;
+  if (MODE === 'postgres') rows = await supabase.collection(name);
+  else if (MODE === 'redis') {
+    const raw = await redisGet(PREFIX + name);
+    rows = raw === null ? [] : collection(name, JSON.parse(raw));
+  } else rows = loadFromDisk().get(name) || [];
+  tx.data.set(name, collection(name, rows));
+  return tx.data.get(name);
+}
+
+/** جلب صورة واحدة عند الطلب فقط (بدون تحميل كل جدول الصور). */
+async function getFile(id) {
+  const tx = context.getStore();
+  if (tx && !tx.closed) await ensureCollection('files');
+  const rows = (context.getStore()?.data || cache).get('files') || [];
+  const local = rows.find((f) => f.id === id);
+  if (local) return local;
+  if (MODE === 'postgres') return supabase.getRow('files', id);   // null لو مش موجودة
+  if (MODE === 'redis') {
+    const raw = await redisGet(PREFIX + 'files');
+    if (raw === null) return null;
+    return JSON.parse(raw).find((f) => f.id === id) || null;
+  }
+  return null;
+}
+
+/** نسخة احتياطية كاملة بكل المجموعات بما فيها الصور (طلب نادر للأدمن فقط). */
+async function fullBackup() {
+  const tx = context.getStore();
+  if (tx && !tx.closed) return Object.fromEntries(tx.data);
+  await init();
+  if (MODE === 'file') return Object.fromEntries(loadFromDisk());
+  if (MODE === 'postgres') return Object.fromEntries(await supabase.load({ includeFiles: true }));
+  return Object.fromEntries((await loadFromRedis({ includeFiles: true })).data);
+}
+
 function storageError(message, cause) {
   const e = new Error(message, { cause });
   e.code = 'STORAGE_UNAVAILABLE';
@@ -114,22 +214,24 @@ function loadFromDisk() {
   }
 }
 
-async function loadFromRedis() {
+async function loadFromRedis({ includeFiles = false } = {}) {
   const data = new Map();
+  let names = [];
   try {
     const manifest = await redisGet(PREFIX + 'collections');
-    const names = manifest === null ? [] : JSON.parse(manifest);
+    names = manifest === null ? [] : JSON.parse(manifest);
     if (!Array.isArray(names) || names.some((n) => typeof n !== 'string' || !/^[a-z][a-z0-9_]*$/i.test(n))) {
       throw new Error('Invalid Redis collection manifest');
     }
-    if (names.length) {
-      const values = await redisCmd(names.map((name) => ['GET', PREFIX + name]));
-      names.forEach((name, i) => {
+    const wanted = names.filter((name) => includeFiles || name !== 'files');
+    if (wanted.length) {
+      const values = await redisCmd(wanted.map((name) => ['GET', PREFIX + name]));
+      wanted.forEach((name, i) => {
         if (values[i] === null) throw new Error('Missing collection: ' + name);
         data.set(name, collection(name, JSON.parse(values[i])));
       });
     }
-    return data;
+    return { data, names };
   } catch (e) { throw storageError('Cannot read shared persistent database', e); }
 }
 
@@ -191,7 +293,7 @@ async function init() {
       if (MODE === 'file') {
         for (const dir of [DATA_DIR, UPLOAD_DIR]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         cache = loadFromDisk();
-      } else if (MODE === 'redis') { cache = await loadFromRedis(); }
+      } else if (MODE === 'redis') { cache = (await loadFromRedis()).data; }
       else { cache = await loadFromSupabase(); }
       console.log(`🗄️  التخزين الدائم: ${MODE === 'redis' ? 'Upstash Redis'
         : MODE === 'postgres' ? 'Supabase PostgreSQL' + (supabase.host() ? ' (' + supabase.host() + ')' : '')
@@ -267,7 +369,7 @@ async function transaction(work) {
   queue = new Promise((resolve) => { unlock = resolve; });
   await previous;
   let lock, renewal, result, snap = null;
-  const tx = { data: null, dirty: new Set(), effects: [], closed: false };
+  const tx = { data: null, dirty: new Set(), effects: [], closed: false, redisNames: [] };
   try {
     await init();
     if (MODE === 'redis') {
@@ -277,7 +379,9 @@ async function transaction(work) {
           .catch(() => {});  // The commit still verifies ownership; a lost lease can NEVER write.
       }, LOCK_MS / 3);
       renewal.unref();
-      tx.data = await loadFromRedis();
+      const loaded = await loadFromRedis();
+      tx.data = loaded.data;
+      tx.redisNames = loaded.names;   // نحفظ الـmanifest كامل عشان الكتابة ما تمسحش المجموعات غير المحمّلة (الصور)
     } else if (MODE === 'postgres') {
       lock = await acquirePgLock();
       renewal = setInterval(() => {
@@ -293,9 +397,12 @@ async function transaction(work) {
       if (MODE === 'file') commitFile(tx.data);
       else if (MODE === 'redis') {
         const names = [...tx.dirty];
+        /* الـmanifest الجديد = القديم + المفاتيح المعدّلة — عشان 'files' اللي بتتحمّل
+           كسول ما تتمسحش من قائمة المجموعات لمّا معاملة تانية تعمل commit. */
+        const manifest = [...new Set([...tx.redisNames, ...tx.data.keys()])];
         const committed = (await redisCmd([[
           'EVAL', COMMIT_SCRIPT, 2 + names.length, LOCK_KEY, PREFIX + 'collections',
-          ...names.map((name) => PREFIX + name), lock, JSON.stringify([...tx.data.keys()]),
+          ...names.map((name) => PREFIX + name), lock, JSON.stringify(manifest),
           ...names.map((name) => JSON.stringify(tx.data.get(name))),
         ]]))[0];
         if (committed !== 1) throw storageError('Database lease lost; request was not saved');
@@ -371,6 +478,7 @@ const backup = () => Object.fromEntries(context.getStore()?.data || cache);
 
 module.exports = {
   MODE, IS_SERVERLESS, DATA_DIR, UPLOAD_DIR, DATABASE_FILE, PREFIX,
-  init, transaction, afterCommit, storageError, redisCmd, redisGet,
+  init, transaction, read, imageRead, afterCommit, ensureCollection, getFile, fullBackup,
+  storageError, redisCmd, redisGet,
   all, write, find, filter, insert, update, remove, uid, token, nextOrderNumber, backup,
 };

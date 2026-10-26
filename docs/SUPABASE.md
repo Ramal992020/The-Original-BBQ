@@ -36,13 +36,16 @@
 ## ٢) شغّل ملف الـMigration (الجداول + الحماية)
 
 1. من القائمة الجانبية: **SQL Editor** → **New query**.
-2. افتح ملف المشروع [`supabase/migrations/0001_init.sql`](../supabase/migrations/0001_init.sql) وانسخ محتواه كامل.
-3. دوس **Run** — الملف بيعمل:
+2. افتح ملف المشروع [`supabase/migrations/0001_init.sql`](../supabase/migrations/0001_init.sql) وانسخ محتواه كامل ودوس **Run**.
+3. بنفس الطريقة شغّل بعده [`supabase/migrations/0002_perf.sql`](../supabase/migrations/0002_perf.sql) — ملف تحسينات السرعة (موجود حتى لو كانت قاعدتك شغالة من قبل).
+4. الملفان بيعملوا:
    - جداول حقيقية: `bbq_users` (الحسابات) · `bbq_orders` (الطلبات) · `bbq_notifications` (الإشعارات) · `bbq_sessions` (الجلسات) + باقي مجموعات التطبيق.
    - قيود تمنع التكرار: إيميل فريد · رقم طلب فريد · **منع تكرار الطلب عند إعادة المحاولة** (`user_id + request_id`) · هاش التوكن فريد.
    - **RLS مفعّل على كل الجداول بدون أي policies** → أدوار `anon`/`authenticated` (المفاتيح العامة) مبيقدروش يقروش ولا يكتبوا أي صف، والوصول الحقيقي من السيرفر بمفتاح `service_role` بس.
    - دوال الحفظ الذري `bbq_*` (تنفيذها لـ`service_role` بس): تحميل + قفل بين النسخ العاملة + **commit ذري** — يعني مفيش رد «نجاح» قبل الحفظ الفعلي، ومفيش نصف بيانات لو حصل فشل.
+   - `0002_perf.sql`: جدول الصور الثقيل `bbq_files` مبقاش بيتحمّل مع كل طلب (بيتجاب عند طلب الصورة بس)، ودوالتين `bbq_get_row` / `bbq_collection` للجلب الكسول — دول مع تحسينات السيرفر بيقلّوا زمن استجابة لوحة الإدارة بشكل كبير.
 
+> **ترقية مشروع شغّال؟** شغّل `0002_perf.sql` بس فوق القاعدة الحالية واعمل Deploy لآخر كود — البيانات ما بتتمسش.
 > لو بتستخدم Supabase CLI بدل الواجهة: `supabase db push` بيطبّق نفس مجلد `supabase/migrations/`.
 
 ## ٣) انسخ المفاتيح
@@ -125,7 +128,7 @@ npm run test:all        # كل الاختبارات (API + Vercel + Redis + Supa
 |---|---|---|
 | `503 STORAGE_UNAVAILABLE` + «راجع SUPABASE_URL…» | المتغيرات ناقصة أو مكتوبة غلط | ظبّط المتغيرين + Redeploy |
 | `Supabase auth failed` | مفتاح `anon` بدل `service_role` أو ناقص | انسخ `service_role` كامل |
-| `Supabase function missing` | الـmigration مش متشغل | شغّل `0001_init.sql` في SQL Editor |
+| `Supabase function missing` | الـmigration مش متشغل | شغّل `0001_init.sql` ثم `0002_perf.sql` في SQL Editor |
 | `Supabase error 401/403` | المفتاح اتغير أو اتشال | رجّع المفتاح من Settings → API |
 | الطلبات القديمة مش ظاهرة | النقل متعملش | `node tools/import-backup.js` (خطوة ٥) |
 | `OWNER_NOT_CONFIGURED` | مفيش `ADMIN_PASSWORD` | ضيفه في الاستضافة + Redeploy |

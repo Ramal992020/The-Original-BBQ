@@ -311,7 +311,7 @@ DEMO_LOGIN=0 npm start
 
 **الخطوات بالتفصيل في [DEPLOY.md](DEPLOY.md)** — الملخص:
 1. ارفع الريبو على GitHub.
-2. اعمل مشروع **Supabase** مجاني وشغّل `supabase/migrations/0001_init.sql` من SQL Editor، وخُد `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`.
+2. اعمل مشروع **Supabase** مجاني وشغّل ملفات الـmigrations بالترتيب من SQL Editor (`0001_init.sql` ثم `0002_perf.sql` لتحسينات السرعة)، وخُد `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`.
 3. على [vercel.com/new](https://vercel.com/new) اعمل Import للريبو وضيف متغيرات البيئة:
    `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` · `ADMIN_EMAIL` · `ADMIN_PASSWORD` · `APP_URL` · `DEMO_LOGIN=0`
 4. **Redeploy** بعد أي تغيير في المتغيرات (مش بتتطبّق على deploy قديم).

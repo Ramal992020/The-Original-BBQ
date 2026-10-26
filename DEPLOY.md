@@ -20,7 +20,7 @@
 ## 📋 المحتويات
 
 > 📌 **عايز الخطوات بالتفصيل من الصفر؟** [`docs/SUPABASE.md`](docs/SUPABASE.md) —
-> إنشاء مشروع Supabase → تشغيل migration → نسخ `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` → إضافتهم في Vercel → Redeploy → التأكد (بالصور والنسخ/اللصق) + ترحيل البيانات القديمة.
+> إنشاء مشروع Supabase → تشغيل ملفات الـmigration بالترتيب (`0001_init.sql` ثم `0002_perf.sql`) → نسخ `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` → إضافتهم في Vercel → Redeploy → التأكد (بالصور والنسخ/اللصق) + ترحيل البيانات القديمة.
 > (ولو بتفضل Upstash: [`docs/VERCEL-UPSTASH.md`](docs/VERCEL-UPSTASH.md) — لسه مدعوم كـLegacy.)
 
 1. [قبل ما تبدأ](#١-قبل-ما-تبدأ)

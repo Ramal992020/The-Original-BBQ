@@ -91,16 +91,17 @@ function resizePng(buf, maxSide = 1400) {
 }
 
 /* حفظ ملف في التخزين السحابي (وضع Vercel) → بيتخزن في مجموعتنا ونخدمه من /api/img/:id */
-function saveToDb(data, mime, prefix = 'up') {
+async function saveToDb(data, mime, prefix = 'up') {
   const id = `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
-  const rows = store.all('files').slice();
+  /* مجموعة الصور مش بتتحمّل مع كل طلب — نحمّلها كسول جوه نفس المعاملة قبل التعديل */
+  const rows = (await store.ensureCollection('files')).slice();
   rows.push({ id, mime, size: data.length, b64: data.toString('base64'), at: new Date().toISOString() });
   store.write('files', rows.slice(-300));      // بنحتفظ بآخر ٣٠٠ ملف
   return { url: '/api/img/' + id, bytes: data.length };
 }
 
 /* حفظ صورة مرفوعة → يرجّع الرابط النسبي */
-function saveUpload(file, { prefix = 'up' } = {}) {
+async function saveUpload(file, { prefix = 'up' } = {}) {
   const ext = (path.extname(file.filename || '').slice(1) || 'jpg').toLowerCase();
   const safeExt = MIME[ext] ? ext : 'jpg';
   let data = file.data;
@@ -108,7 +109,7 @@ function saveUpload(file, { prefix = 'up' } = {}) {
   else if (safeExt === 'png') data = resizePng(data, 1200);
 
   /* قاعدة سحابية/سيرفرلس: مفيش قرص ثابت — بنخزن في قاعدة البيانات نفسها */
-  if (store.MODE !== 'file' || store.IS_SERVERLESS) return saveToDb(data, MIME[safeExt] || 'image/jpeg', prefix);
+  if (store.MODE !== 'file' || store.IS_SERVERLESS) return await saveToDb(data, MIME[safeExt] || 'image/jpeg', prefix);
 
   const name = `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.${safeExt}`;
   fs.writeFileSync(path.join(store.UPLOAD_DIR, name), data);
@@ -116,23 +117,23 @@ function saveUpload(file, { prefix = 'up' } = {}) {
 }
 
 /* حفظ صورة جاية base64 (من مولّد الصور مثلًا) */
-function saveBase64(b64, mimeHint = 'image/png') {
+async function saveBase64(b64, mimeHint = 'image/png') {
   const m = /^data:(image\/[a-z+]+);base64,(.*)$/i.exec(String(b64).trim());
   const mime = m ? m[1] : mimeHint;
   const payload = Buffer.from(m ? m[2] : String(b64), 'base64');
   const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'jpg';
   const data = ext === 'jpg' ? resizeJpeg(payload, 1200, 80) : ext === 'png' ? resizePng(payload, 1200) : payload;
 
-  if (store.MODE !== 'file' || store.IS_SERVERLESS) return saveToDb(data, mime, 'ai');
+  if (store.MODE !== 'file' || store.IS_SERVERLESS) return await saveToDb(data, mime, 'ai');
 
   const name = `ai-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
   fs.writeFileSync(path.join(store.UPLOAD_DIR, name), data);
   return { url: '/uploads/' + name, bytes: data.length };
 }
 
-/* قراءة ملف مخزّن في قاعدة البيانات (وضع Vercel) */
-function getFile(id) {
-  const row = store.find('files', (f) => f.id === id);
+/* قراءة ملف مخزّن في قاعدة البيانات (وضع Vercel) — جلب عند الطلب بس، مش تحميل كامل */
+async function getFile(id) {
+  const row = await store.getFile(id);
   if (!row) return null;
   return { buffer: Buffer.from(row.b64, 'base64'), mime: row.mime, size: row.size };
 }
