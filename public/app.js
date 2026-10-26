@@ -2016,14 +2016,39 @@ let refreshingLive = false;
 let sseFailures = 0;
 
 /* توقيتات التحديث — مراجعة شاملة لضغط الطلبات على قاعدة البيانات:
+   tracking: تتبّع طلب نشط (العميل بيتفرج على حالته) — نبض ثابت سريع من غير تباطؤ ·
    fast: على الاستضافة السيرفرلس (بلا SSE) · slow: تباطؤ تلقائي لما ما فيش جديد ·
    sseSafety: شبكة أمان بطيئة بينما البث اللحظي SSE شغال (الجديد بيوصل فورًا بالأحداث). */
-const POLL = { fast: 10000, slow: 30000, sseSafety: 60000, minGap: 1500, backoffRounds: 3 };
+const POLL = { tracking: 5000, fast: 10000, slow: 30000, sseSafety: 60000, minGap: 1500, backoffRounds: 3 };
+/* حالات نهائية مفيش بعدها تحديث حالة منتظر — التتبع السريع بيتوقف لما الطلب يوصل ليها */
+const TERMINAL_ORDER_STATUS = ['delivered', 'cancelled'];
 let lastAutoRefresh = 0;
 let unchangedRounds = 0;
 let lastAdminSignature = '';
 let lastCustomersFetch = 0;
 let lastUsersFetch = 0;
+
+/* هل العميل فاتح صفحة تتبع لطلب لسه شغّال (متسلّمش/متلغاش)؟ */
+function activeTracking() {
+  const r = parseHash();
+  if (!['order', 'my-orders'].includes(r.name)) return false;
+  return MY.orders.some((o) => !TERMINAL_ORDER_STATUS.includes(o.status));
+}
+
+/* الإيقاع المطلوب دلوقتي حسب القناة (SSE أم polling) والصفحة والحالة. */
+function desiredPollInterval() {
+  if (es) return POLL.sseSafety;                 /* البث اللحظي شغال → الأحداث فورية، والنبض مجرد شبكة أمان */
+  if (activeTracking()) return POLL.tracking;    /* تتبع طلب نشط → ٥ ثوانٍ ثابتة بدون تباطؤ */
+  return unchangedRounds >= POLL.backoffRounds ? POLL.slow : POLL.fast;
+}
+
+/* يغيّر المؤقّت بس لما الإيقاع المطلوب يختلف — عشان التنقل بين الصفحات يسرّع/يبطّئ فورًا */
+let realtimeStarted = false;
+function syncPollInterval() {
+  if (!realtimeStarted) return;                /* قبل تسجيل الدخول مفيش نبض يشغّل */
+  const want = desiredPollInterval();
+  if (want !== pollInterval) startPolling(want);
+}
 
 function adminOrdersQuery() {
   const p = new URLSearchParams();
@@ -2092,20 +2117,18 @@ async function refreshLiveState(force = false) {
     }
   } catch { /* Leave the last known data visible and retry; never invent a successful update. */ }
   finally { refreshingLive = false; }
+  /* الحالة ممكن تكون وصلت لحالة نهائية أو الصفحة اتغيرت → نراجع الإيقاع فورًا */
+  syncPollInterval();
   return changed;
 }
 
-/* نبضة التحديث الدوري: تباطؤ تلقائي لما الدنيا هادية، ورجوع سريع مع أي تغيير. */
+/* نبضة التحديث الدوري: تتبع سريع ثابت لطلب نشط، وتباطؤ تلقائي لباقي الصفحات وهي هادية. */
 async function pollTick() {
   const changed = await refreshLiveState();
-  if (S.realtime !== false) return;
-  if (changed) {
-    unchangedRounds = 0;
-    if (pollInterval !== POLL.fast) startPolling(POLL.fast);
-  } else {
-    unchangedRounds += 1;
-    if (unchangedRounds >= POLL.backoffRounds && pollInterval !== POLL.slow) startPolling(POLL.slow);
-  }
+  if (es) return;                               /* SSE هو المصدر اللحظي — الإيقاع يفضل شبكة أمان */
+  if (changed) unchangedRounds = 0;
+  else unchangedRounds += 1;
+  syncPollInterval();
 }
 
 function connectSSE() {
@@ -2141,9 +2164,10 @@ function startPolling(ms = POLL.fast) {
   pollTimer = setInterval(pollTick, ms);
 }
 function startRealtime() {
-  /* سيرفرلس: تحديث دوري سريع يتباطأ تلقائيًا · خادم حي: SSE فوري + شبكة أمان كل دقيقة */
-  startPolling(S.realtime === false ? POLL.fast : POLL.sseSafety);
+  /* سيرفرلس: polling حسب الصفحة (تتبع سريع/تباطؤ تلقائي) · خادم حي: SSE فوري + شبكة أمان */
+  realtimeStarted = true;
   connectSSE();
+  syncPollInterval();
 }
 window.addEventListener('online', () => refreshLiveState());
 window.addEventListener('focus', () => refreshLiveState());
@@ -2152,7 +2176,7 @@ document.addEventListener('visibilitychange', () => {
     /* التبويب مخفي: نوقف النبض تمامًا لتقليل الحمل على السيرفر وقاعدة البيانات */
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   } else {
-    startPolling(pollInterval || POLL.fast);
+    syncPollInterval();
     refreshLiveState();
   }
 });
@@ -2184,6 +2208,7 @@ function adminBodyFor(tab) {
 async function render(opts = {}) {
   const r = parseHash();
   const view = $('#view');
+  const hadOrders = MY.loaded;   /* كانت الطلبات محمّلة قبل الرسم؟ (لتحديث فوري عند فتح التتبع) */
 
   /* مسجّل بالفعل وفتح رابط دخول/ترحيب؟ يدخل على طول (من غير خطوة زيادة في التاريخ) */
   if (ME && ['welcome', 'login', 'signup', 'forgot'].includes(r.name)) return enterApp(r.q.get('return'));
@@ -2243,6 +2268,10 @@ async function render(opts = {}) {
   view.innerHTML = html + navHTML(r.name === 'order' ? 'my-orders' : r.name === 'menu' ? 'orders' : r.name);
   if (!opts.soft || opts.scroll) window.scrollTo({ top: 0 });
   renderCartBar(); updateBadges(); bindPage(r); updateThemeControls(); syncScrolled();
+  /* التنقل لصفحة تتبع يسرّع النبض فورًا (من غير ما نستنى المؤقّت البطيء ينتهي) */
+  syncPollInterval();
+  /* فتح التتبع وبياناتنا قديمة → تحديث فوري في الخلفية بدل انتظار أول نبضة */
+  if (!opts.soft && hadOrders && ME && ['order', 'my-orders'].includes(r.name)) refreshLiveState(true);
 }
 
 /* ============================== ١٨) ربط عناصر الصفحة ============================== */
@@ -2533,6 +2562,7 @@ function signOutLocally() {
   AD.orders = []; AD.users = []; AD.customers = []; AD.stats = null; AD.payCfg = null; AD.waCfg = null;
   if (es) { es.close(); es = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  realtimeStarted = false; pollInterval = 0;
   lastAdminSignature = ''; unchangedRounds = 0; lastCustomersFetch = 0; lastUsersFetch = 0;
 }
 function acceptLogin(data) {
